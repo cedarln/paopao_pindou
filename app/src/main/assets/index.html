@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=yes, maximum-scale=10">
-<title>拼豆图纸</title>
+<title>泡泡拼豆</title>
 <style>
   :root { --ink:#333; --line:#e8e8e8; --accent:#e0526e; }
   * { box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
@@ -20,14 +20,14 @@
   .num { min-width:26px; text-align:center; font-weight:600; }
   #stats { font-size:11px; color:#999; padding:6px 12px; }
   #stage { overflow:auto; padding:8px; }
-  #chart { background:#fff; box-shadow:0 1px 4px rgba(0,0,0,.08); display:block; }
+  #chart { background:#fff; box-shadow:0 1px 4px rgba(0,0,0,.08); display:block; image-rendering:pixelated; }
   #chart.fit { width:100%; height:auto; }
   #empty { text-align:center; color:#aaa; font-size:13px; padding:40px 20px; }
 </style>
 </head>
 <body>
 <header>
-  <h1>拼豆图纸 <small id="ver">Mard 221 色</small></h1>
+  <h1>泡泡拼豆 <small id="ver">Mard 221 色</small></h1>
   <button onclick="checkUpdate()">检查更新</button>
 </header>
 <div class="bar">
@@ -222,7 +222,11 @@ function currentCounts(){
   for(const c of grid.cells){ if(c){ counts.set(c.code,(counts.get(c.code)||0)+1); total++; } }
   return {counts,total,legend:COLORS.filter(c=>counts.has(c.code))};
 }
-function render(){ drawChart(document.getElementById('chart'), 20); }
+function render(){
+  // 高分辨率 backing：放大看色号不糊。格子上限 64px，总像素封顶 ~16M 防内存爆
+  const cell=Math.max(20,Math.min(64,Math.floor(Math.sqrt(16e6/((grid.w+3)*(grid.h+3))))));
+  drawChart(document.getElementById('chart'), cell);
+}
 
 function drawChart(canvas, cell){
   if(!grid) return;

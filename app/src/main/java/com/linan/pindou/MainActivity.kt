@@ -40,6 +40,13 @@ class MainActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         webView = WebView(this)
         setContentView(webView)
+        // targetSdk 36 在 Android 15+ 强制 edge-to-edge，内容会画到状态栏底下；
+        // 给 WebView 加系统栏内边距，顶栏才不会被通知栏遮住
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(webView) { v, insets ->
+            val bars = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars())
+            v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
+            androidx.core.view.WindowInsetsCompat.CONSUMED
+        }
 
         webView.settings.apply {
             javaScriptEnabled = true
@@ -129,12 +136,12 @@ class MainActivity : AppCompatActivity() {
                     put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, name)
                     put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/png")
                     if (android.os.Build.VERSION.SDK_INT >= 29) {
-                        put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, "Pictures/拼豆图纸")
+                        put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, "Pictures/泡泡拼豆")
                         put(android.provider.MediaStore.Images.Media.IS_PENDING, 1)
                     } else {
                         val dir = java.io.File(
                             android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_PICTURES),
-                            "拼豆图纸"
+                            "泡泡拼豆"
                         ).apply { mkdirs() }
                         put(android.provider.MediaStore.Images.Media.DATA, java.io.File(dir, name).absolutePath)
                     }
@@ -152,7 +159,7 @@ class MainActivity : AppCompatActivity() {
                     values.put(android.provider.MediaStore.Images.Media.IS_PENDING, 0)
                     resolver.update(uri, values, null, null)
                 }
-                toast("已保存到相册 Pictures/拼豆图纸/$name")
+                toast("已保存到相册 Pictures/泡泡拼豆/$name")
             } catch (e: Exception) {
                 toast("保存失败：${e.message}")
             }
