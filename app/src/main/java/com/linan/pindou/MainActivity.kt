@@ -39,14 +39,36 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         webView = WebView(this)
-        setContentView(webView)
-        // targetSdk 36 在 Android 15+ 强制 edge-to-edge，内容会画到状态栏底下；
-        // 给 WebView 加系统栏内边距，顶栏才不会被通知栏遮住
-        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(webView) { v, insets ->
+        // WebView 的网页内容不吃它自身的 padding（v1.1 真机验证过无效），
+        // 所以套一层 FrameLayout，insets 加在外层容器上
+        val root = android.widget.FrameLayout(this).apply {
+            setBackgroundColor(android.graphics.Color.parseColor("#F6F6F8")) // 与页面底色一致
+            addView(
+                webView,
+                android.widget.FrameLayout.LayoutParams(
+                    android.widget.FrameLayout.LayoutParams.MATCH_PARENT,
+                    android.widget.FrameLayout.LayoutParams.MATCH_PARENT
+                )
+            )
+        }
+        setContentView(root)
+        // targetSdk 36 在 Android 15+ 强制 edge-to-edge，内容会画到状态栏底下。
+        // 容器和 DecorView 两层都挂监听：谁先拿到 insets 谁加 padding 并 CONSUMED，
+        // 后一层拿到 0 不会重复加；也防 AppCompat 包装层把 insets 截留成 0。
+        val barsListener = androidx.core.view.OnApplyWindowInsetsListener { v, insets ->
+            // 本 App 没手动开 edge-to-edge：API 35+ 因 targetSdk 36 被强制开启，才需要自己留白；
+            // 老系统框架已留好状态栏位置，再加 padding 会双重留白
+            if (android.os.Build.VERSION.SDK_INT < 35) {
+                return@OnApplyWindowInsetsListener insets
+            }
             val bars = insets.getInsets(androidx.core.view.WindowInsetsCompat.Type.systemBars())
             v.setPadding(bars.left, bars.top, bars.right, bars.bottom)
             androidx.core.view.WindowInsetsCompat.CONSUMED
         }
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(root, barsListener)
+        // 状态栏那条露出 DecorView 底色，用白色和页头接成一体
+        window.decorView.setBackgroundColor(android.graphics.Color.WHITE)
+        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(window.decorView, barsListener)
 
         webView.settings.apply {
             javaScriptEnabled = true
