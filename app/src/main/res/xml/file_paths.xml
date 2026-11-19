@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- 应用内更新下载的 APK：getExternalFilesDir(null)/update/ -->
+    <external-files-path name="update" path="update/" />
+    <!-- 分享图纸时写到 cacheDir/share/ -->
+    <cache-path name="share" path="share/" />
+</paths>

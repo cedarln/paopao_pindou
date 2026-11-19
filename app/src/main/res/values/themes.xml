@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Pindou" parent="Theme.MaterialComponents.Light.NoActionBar">
+        <item name="colorPrimary">#E0526E</item>
+        <item name="colorPrimaryVariant">#C73E58</item>
+        <item name="colorOnPrimary">#FFFFFF</item>
+        <item name="android:statusBarColor">#FFFFFF</item>
+        <item name="android:windowLightStatusBar">true</item>
+    </style>
+</resources>

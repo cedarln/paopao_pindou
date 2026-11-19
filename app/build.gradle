@@ -1,0 +1,78 @@
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+
+// ── 签名配置 ───────────────────────────────────────────────────────────
+// 密钥库与密码放在工程根目录的 keystore.properties（已在 .gitignore 里，不会入库）。
+// 对外 Release 必须用 release 签名，和泡泡系列其他 App 保持同一签名身份。
+def keystorePropsFile = rootProject.file('keystore.properties')
+def keystoreProps = new Properties()
+if (keystorePropsFile.exists()) {
+    keystorePropsFile.withInputStream { keystoreProps.load(it) }
+}
+
+// 想发 release 包又没配密钥 -> 直接报错停下，免得悄悄发出去一个未签名 / debug 签名的包
+gradle.taskGraph.whenReady { graph ->
+    def wantsRelease = graph.allTasks.any { it.name in ['assembleRelease', 'bundleRelease', 'packageRelease'] }
+    if (wantsRelease && !keystorePropsFile.exists()) {
+        throw new GradleException(
+            "找不到 ${keystorePropsFile}\n拒绝构建未签名的 release 包。"
+        )
+    }
+}
+
+android {
+    namespace 'com.linan.pindou'
+    compileSdk 36
+    buildToolsVersion "36.1.0"
+
+    defaultConfig {
+        applicationId "com.linan.pindou"
+        minSdk 26
+        targetSdk 36
+        versionCode 1
+        versionName "1.0"
+    }
+
+    signingConfigs {
+        release {
+            if (keystorePropsFile.exists()) {
+                storeFile rootProject.file(keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            if (keystorePropsFile.exists()) {
+                signingConfig signingConfigs.release
+            }
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = '17'
+    }
+}
+
+dependencies {
+    implementation 'androidx.core:core-ktx:1.13.1'
+    implementation 'androidx.appcompat:appcompat:1.7.0'
+    implementation 'androidx.activity:activity-ktx:1.9.3'
+    implementation 'com.google.android.material:material:1.12.0'
+    // 图纸生成内核在 assets/index.html（WebView 本地加载，零网络、零第三方 JS 依赖）
+    // 检查更新用 HttpsURLConnection + 系统 DownloadManager，不引第三方库
+
+    testImplementation 'junit:junit:4.13.2'
+    // 单元测试里用真实的 org.json（Android 的 org.json 在 JVM 测试中只是空壳桩）
+    testImplementation 'org.json:json:20240303'
+}
