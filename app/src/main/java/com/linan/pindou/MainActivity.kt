@@ -181,7 +181,7 @@ class MainActivity : AppCompatActivity() {
                     values.put(android.provider.MediaStore.Images.Media.IS_PENDING, 0)
                     resolver.update(uri, values, null, null)
                 }
-                toast("已保存到相册 Pictures/泡泡拼豆/$name")
+                toast("已保存到相册 Pictures/泡泡拼豆/$name（发商家请选原图或文件）")
             } catch (e: Exception) {
                 toast("保存失败：${e.message}")
             }

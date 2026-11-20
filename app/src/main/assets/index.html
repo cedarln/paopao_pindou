@@ -19,6 +19,7 @@
   input[type=range] { width:110px; accent-color:var(--accent); }
   .num { min-width:26px; text-align:center; font-weight:600; }
   #stats { font-size:11px; color:#999; padding:6px 12px; }
+  .tip { font-size:11px; color:#8a8a8e; padding:6px 12px; background:#fff; border-bottom:1px solid var(--line); }
   #stage { overflow:auto; padding:8px; }
   #chart { background:#fff; box-shadow:0 1px 4px rgba(0,0,0,.08); display:block; image-rendering:pixelated; }
   #chart.fit { width:100%; height:auto; }
@@ -27,7 +28,7 @@
 </head>
 <body>
 <header>
-  <h1>泡泡拼豆 <small id="ver">Mard 221 色</small></h1>
+  <h1>泡泡拼豆 <small id="ver">MARD 221 色号</small></h1>
   <button onclick="checkUpdate()">检查更新</button>
 </header>
 <div class="bar">
@@ -44,6 +45,7 @@
   <label><input type="checkbox" id="fit" checked> 适应宽度</label>
 </div>
 <div id="stats"></div>
+<div class="tip">发代拼商家：用「保存图纸」的高清 PNG，微信选「原图」或以文件发送；普通图片会被压缩糊掉色号。</div>
 <div id="stage"><canvas id="chart" class="fit"></canvas></div>
 
 <script>
@@ -238,14 +240,16 @@ function drawChart(canvas, cell){
   const perRow=Math.max(1,Math.floor((w*cell+2*margin)/(chipW+chipGap)));
   const legendRows=Math.ceil(legend.length/perRow);
   const legendH=legendRows*(chipH+chipGap)+chipGap*2;
+  const footH=Math.round(cell*1.4);
   canvas.width=w*cell+2*margin;
-  canvas.height=h*cell+2*margin+titleH+legendH;
+  canvas.height=h*cell+2*margin+titleH+legendH+footH;
   const ctx=canvas.getContext('2d');
   ctx.fillStyle="#fff"; ctx.fillRect(0,0,canvas.width,canvas.height);
   const ox=margin, oy=margin+titleH;
   ctx.fillStyle="#999"; ctx.font=`${Math.round(cell*1.1)}px sans-serif`; ctx.textAlign="left"; ctx.textBaseline="middle";
-  ctx.fillText(`Mard(${total})`, 4, titleH/2+2);
-  const codeFont=`${Math.max(4,Math.round(cell*0.36))}px sans-serif`;
+  // 图上明写色号体系，代拼商家一眼能认 MARD（v1.3：商家曾误判为非 Mard 图）
+  ctx.fillText(`MARD色号 · ${total}颗`, 4, titleH/2+2);
+  const codeFont=`${Math.max(4,Math.round(cell*0.42))}px sans-serif`;
   for(let y=0;y<h;y++){
     for(let x=0;x<w;x++){
       const c=cells[y*w+x];
@@ -291,6 +295,8 @@ function drawChart(canvas, cell){
     ctx.fillStyle=c.text; ctx.font=`${Math.round(chipH*0.42)}px sans-serif`; ctx.textAlign="center";
     ctx.fillText(`${c.code} (${counts.get(c.code)})`, lx+chipW/2, yy+chipH/2+0.5);
   });
+  ctx.fillStyle="#888"; ctx.font=`${Math.max(5,Math.round(cell*0.45))}px sans-serif`; ctx.textAlign="left";
+  ctx.fillText(`色号体系 MARD 221（A~M）· 屏幕色仅供预览，配色以实物色卡为准`, 4, canvas.height-footH/2);
   document.getElementById('stats').textContent =
     `${w}×${h} 格 · ${total} 颗豆 · ${legend.length} 种色号 · 双指缩放查看色号`;
 }
@@ -303,7 +309,7 @@ function exportDataURL(){
   render();
   return url;
 }
-function fileName(){ return `拼豆图纸-Mard-${grid.w}x${grid.h}.png`; }
+function fileName(){ return `拼豆图纸-MARD-${grid.w}x${grid.h}.png`; }
 
 function savePNG(){
   if(!grid) return;
@@ -322,7 +328,7 @@ function sharePNG(){
 function copyList(){
   if(!grid) return;
   const {counts,total,legend}=currentCounts();
-  const lines=[`拼豆备料清单 · Mard 221 色`,`图纸 ${grid.w}×${grid.h} 格 · 共 ${total} 颗 · ${legend.length} 种色号`,""];
+  const lines=[`拼豆备料清单 · MARD 221 色号（A~M）`,`图纸 ${grid.w}×${grid.h} 格 · 共 ${total} 颗 · ${legend.length} 种色号`,""];
   for(const c of legend) lines.push(`${c.code} × ${counts.get(c.code)}`);
   const text=lines.join("\n");
   if(HAS_NATIVE){ Android.copyText(text); }
@@ -343,7 +349,7 @@ document.getElementById('merge').addEventListener('change',regenerate);
 document.getElementById('fit').addEventListener('change',e=>{
   document.getElementById('chart').classList.toggle('fit', e.target.checked);
 });
-if(HAS_NATIVE){ document.getElementById('ver').textContent = "Mard 221 色 · v"+Android.version(); }
+if(HAS_NATIVE){ document.getElementById('ver').textContent = "MARD 221 色号 · v"+Android.version(); }
 
 loadSample();
 </script>
