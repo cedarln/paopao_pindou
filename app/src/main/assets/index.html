@@ -115,6 +115,7 @@
   <button class="mini" onclick="paintUndo()">撤销</button>
   <button class="mini" onclick="paintReset()">重置</button>
   <button class="mini" onclick="saveLineArt()">导出空白线稿</button>
+  <button class="mini" onclick="savePaintSheet()">颜料对照表</button>
   <label><input type="checkbox" id="pbPreview"> 预览成品</label>
   <span id="paintProg"></span>
 </div>
@@ -181,6 +182,85 @@ function ciede2000(l1,a1,b1,l2,a2,b2){
   const Rt=-Math.sin(2*dTheta*rad)*Rc;
   const dl=dLp/Sl, dc=dCp/Sc, dh=dHp/Sh;
   return Math.sqrt(dl*dl+dc*dc+dh*dh+Rt*dc*dh);
+}
+
+/* ===== 马利 水粉/丙烯 常用色名（RGB 为近似值，仅供标注参考，实物以色卡为准） ===== */
+const PAINT_COLORS = [
+["钛白","#F7F7F5"],["锌白","#F2F3EF"],
+["浅灰","#D9D9D9"],["中灰","#9E9EA0"],["深灰","#5B5B5E"],["佩恩灰","#3B4A57"],
+["煤黑","#17161A"],["象牙黑","#211F1C"],
+["柠檬黄","#F3E667"],["淡黄","#F7EC9B"],["中黄","#F6CE3C"],["镉黄","#F3B805"],
+["土黄","#C9974B"],["那坡里黄","#EDDCAE"],["橙黄","#F0A202"],
+["朱红","#E4512A"],["橘红","#F06A3D"],["大红","#D8202E"],["深红","#B01E22"],
+["曙红","#E02E55"],["玫瑰红","#C4265C"],["胭脂","#7A2233"],["粉红","#F2AEB8"],
+["紫罗兰","#6A4C93"],["青莲","#4B3B8F"],
+["天蓝","#5AA6D6"],["湖蓝","#1F7A8C"],["钴蓝","#1D4FA3"],["群青","#2E4393"],["普蓝","#0F3057"],
+["淡绿","#A9D69B"],["草绿","#6FA03C"],["翠绿","#0FA36B"],["中绿","#2E8B57"],["深绿","#17694A"],
+["橄榄绿","#6B7B3A"],["粉绿","#B9CDB4"],
+["赭石","#B56A3B"],["褐","#8C6B4F"],["熟褐","#7B4A34"],["土红","#A0442E"]
+].map(function(it){
+  const hex=it[1];
+  return {name:it[0], hex:hex, rgb:[parseInt(hex.slice(1,3),16),parseInt(hex.slice(3,5),16),parseInt(hex.slice(5,7),16)]};
+});
+PAINT_COLORS.forEach(function(c){ c.lab=rgb2lab(c.rgb[0],c.rgb[1],c.rgb[2]); });
+const paintCache=new Map();
+/** 找最接近的马利水粉/丙烯色名（CIEDE2000，与拼豆选色同一套色差） */
+function paintNearest(c){
+  const key=c.join(',');
+  if(paintCache.has(key)) return paintCache.get(key);
+  const lab=rgb2lab(c[0],c[1],c[2]);
+  let best=PAINT_COLORS[0], bd=Infinity;
+  for(const p of PAINT_COLORS){
+    const d=ciede2000(lab[0],lab[1],lab[2],p.lab[0],p.lab[1],p.lab[2]);
+    if(d<bd){bd=d;best=p;}
+  }
+  paintCache.set(key,best);
+  return best;
+}
+/** 图例色 -> 色名；两张色卡撞上同一个名字时按明度排「浅/中/深」，保证互不重名 */
+function paintLabels(list){
+  const groups=new Map();
+  list.forEach((c,i)=>{ const n=paintNearest(c).name; if(!groups.has(n)) groups.set(n,[]); groups.get(n).push(i); });
+  const out=new Array(list.length);
+  const L=i=>rgb2lab(list[i][0],list[i][1],list[i][2])[0];
+  for(const [name,idx] of groups){
+    if(idx.length===1){ out[idx[0]]=name; continue; }
+    idx.sort((a,b)=>L(b)-L(a));                       // 由浅到深
+    const head=name.charAt(0);
+    idx.forEach((i,k)=>{
+      const q = k===0 ? '浅' : k===idx.length-1 ? '深' : (k < idx.length/2 ? '中浅' : '中深');
+      const special = head==='浅'||head==='深'||head==='淡'||head==='中'||head==='那';
+      out[i] = special
+        ? name+'('+(k===0?'偏浅':k===idx.length-1?'偏深':(k < idx.length/2 ? '略浅' : '略深'))+')'
+        : q+name;
+    });
+  }
+  return out;
+}
+/** 颜料清单：同名合并成一支，记编号和区域数，按用量从多到少排 */
+function paintSummary(M,lg){
+  const names=paintLabels(lg.list);
+  const blobs=new Array(lg.list.length).fill(0);
+  for(const r of M.regions){ const n=lg.nums.get(r.id); if(n) blobs[n-1]++; }
+  const map=new Map();
+  lg.list.forEach((c,i)=>{
+    if(!map.has(names[i])) map.set(names[i],{name:names[i],nums:[],cells:0});
+    const it=map.get(names[i]); it.nums.push(i+1); it.cells+=blobs[i];
+  });
+  const items=[...map.values()].sort((a,b)=>b.cells-a.cells);
+  const text=`颜料清单 ${items.length} 支（同名共用一支）：`+items.map(it=>it.nums.length>1?`${it.name}${it.nums.join('+')}号`:it.name).join('、');
+  return {names,items,text};
+}
+/** 按估算字宽折行（画布高度要先定，这里拿不到 ctx.measureText） */
+function pbWrap(text,maxW,fs){
+  const lines=[]; let cur='', w=0;
+  for(const ch of text){
+    const cw=ch.charCodeAt(0)<256?fs*0.55:fs;
+    if(w+cw>maxW && cur){ lines.push(cur); cur=''; w=0; }
+    cur+=ch; w+=cw;
+  }
+  if(cur) lines.push(cur);
+  return lines;
 }
 
 /* 预处理色卡 */
@@ -850,12 +930,18 @@ function drawPaint(canvas, widthPx, blank){
   const cw=M.W*s;
   const unit=cw/100;                       // 标题/图例按画幅宽度定字号，缩放到手机宽度也读得清
   const chipW=Math.round(unit*12), chipH=Math.round(unit*3.6), chipGap=Math.round(unit*1.2);
+  const nameH=Math.round(unit*2.8);
   const perRow=Math.max(1,Math.floor(cw/(chipW+chipGap)));
   const legendRows=Math.ceil(lg.list.length/perRow);
-  const legendH=legendRows*(chipH+chipGap)+chipGap;
+  const legendH=legendRows*(chipH+chipGap+nameH)+chipGap;
+  const sum=paintSummary(M,lg);              // 色名 + 颜料清单
+  const names=sum.names;
+  const listFs=Math.round(unit*2.2);
+  const listLines=pbWrap(sum.text,cw,listFs);
+  const listH=listLines.length*Math.round(listFs*1.5)+chipGap;
   const footH=Math.round(unit*4);
   canvas.width=M.W*s+margin*2;
-  canvas.height=M.H*s+margin*2+titleH+legendH+footH;
+  canvas.height=M.H*s+margin*2+titleH+legendH+listH+footH;
   paintGeom={s,margin,titleH};
   const ctx=canvas.getContext('2d');
   ctx.fillStyle="#fff"; ctx.fillRect(0,0,canvas.width,canvas.height);
@@ -907,17 +993,23 @@ function drawPaint(canvas, widthPx, blank){
   const ly=margin+titleH+M.H*s+chipGap*2;
   lg.list.forEach((c,i)=>{
     const col=i%perRow, row=(i/perRow)|0;
-    const lx=margin+col*(chipW+chipGap), yy=ly+row*(chipH+chipGap);
+    const lx=margin+col*(chipW+chipGap), yy=ly+row*(chipH+chipGap+nameH);
     ctx.fillStyle=rgb(c); ctx.fillRect(lx,yy,chipW,chipH);
     ctx.strokeStyle="#bbb"; ctx.lineWidth=0.5; ctx.strokeRect(lx+0.25,yy+0.25,chipW,chipH);
     const lum=0.299*c[0]+0.587*c[1]+0.114*c[2];
     ctx.fillStyle=lum>140?"#22252b":"#ffffff";
     ctx.font=`600 ${Math.round(unit*2.4)}px sans-serif`; ctx.textAlign="center";
     ctx.fillText(`${i+1}号`, lx+chipW/2, yy+chipH/2+0.5);
+    ctx.fillStyle="#3d434b"; ctx.textAlign="left";
+    ctx.font=`${Math.round(unit*2.0)}px sans-serif`;
+    ctx.fillText(`≈${names[i]}`, lx+2, yy+chipH+nameH*0.62);
   });
+  ctx.fillStyle="#3d434b"; ctx.textAlign="left";
+  ctx.font=`600 ${listFs}px sans-serif`;
+  listLines.forEach((t,i)=>ctx.fillText(t, margin, ly+legendRows*(chipH+chipGap+nameH)+Math.round(listFs*0.9)+i*Math.round(listFs*1.5)));
   ctx.fillStyle="#999"; ctx.textAlign="left";
   ctx.font=`${Math.round(unit*2.6)}px sans-serif`;
-  ctx.fillText(blank?"按编号填色 · 编号对应下方色块":(preview?"成品预览 · 取消「预览成品」继续填色":"点区域填色 · 画笔可选自动或自选颜色"), margin, canvas.height-footH*0.4);
+  ctx.fillText(blank?"按编号填色 · 色名为相近的马利水粉/丙烯（近似，以实物色卡为准）":(preview?"成品预览 · 取消「预览成品」继续填色":"点区域填色 · 画笔可选自动或自选颜色"), margin, canvas.height-footH*0.4);
   return true;
 }
 function pbSame(a,b){ return !!a&&!!b&&a[0]===b[0]&&a[1]===b[1]&&a[2]===b[2]; }
@@ -1001,6 +1093,76 @@ function saveLineArt(){
   if(HAS_NATIVE){ Android.saveImage(url,name); }
   else { const a=document.createElement('a'); a.download=name; a.href=url; a.click(); }
 }
+/* 空白颜料对照表：打印后右列挤上实际颜料、写下管身色号，再照编号上色 */
+function drawPaintSheet(canvas){
+  const M=paintModel; if(!M) return false;
+  const lg=pbLegend(M, pbPreview()?'preview':'work');
+  const items=paintSummary(M,lg).items;
+  if(!items.length) return false;
+  const W=2480, pad=Math.round(W*0.05), u=W/100;
+  const headH=Math.round(u*10), colHeadH=Math.round(u*5);
+  const cols=items.length>26?2:1;
+  const rows=Math.ceil(items.length/cols);
+  const rowH=Math.max(76,Math.min(126,Math.round(2260/rows)));
+  const footH=Math.round(u*6);
+  canvas.width=W; canvas.height=pad*2+headH+colHeadH+rows*rowH+footH;
+  const ctx=canvas.getContext('2d');
+  ctx.fillStyle="#fff"; ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.textBaseline="middle"; ctx.textAlign="left";
+  ctx.fillStyle="#222"; ctx.font=`bold ${Math.round(u*3.4)}px sans-serif`;
+  ctx.fillText(`颜料对照表 · 数字油画 ${M.W}×${M.H} · ${items.length} 支`, pad, pad+headH*0.32);
+  ctx.fillStyle="#8a8a8e"; ctx.font=`${Math.round(u*2.0)}px sans-serif`;
+  ctx.fillText('右列挤上实际颜料、写上管身色号；色名只是近似参考，上色前以这一行比对为准', pad, pad+headH*0.74);
+  const gap=pad*0.4;
+  const colW=(W-pad*2-gap*(cols-1))/cols;
+  const numW=colW*0.085, swW=colW*0.17, nameW=colW*0.30, useW=colW*0.13;
+  const blankW=colW-numW-swW-nameW-useW;
+  const top0=pad+headH;
+  const heads=[['编号',numW],['画面颜色',swW],['相近色名',nameW],['用量',useW],['实物颜料（贴/写色号）',blankW]];
+  for(let col=0;col<cols;col++){
+    const x0=pad+col*(colW+gap);
+    let hx=x0;
+    ctx.fillStyle="#8a8a8e"; ctx.font=`${Math.round(u*1.9)}px sans-serif`; ctx.textAlign="left";
+    heads.forEach(hd=>{ ctx.fillText(hd[0], hx+u*0.4, top0+colHeadH*0.5); hx+=hd[1]; });
+    ctx.strokeStyle="#c9c9ce"; ctx.lineWidth=1.5;
+    ctx.beginPath(); ctx.moveTo(x0,top0+colHeadH); ctx.lineTo(x0+colW,top0+colHeadH); ctx.stroke();
+  }
+  const top=top0+colHeadH;
+  items.forEach((it,k)=>{
+    const col=(k/rows)|0, row=k%rows;
+    const x0=pad+col*(colW+gap), yy=top+row*rowH;
+    const c=lg.list[it.nums[0]-1];
+    ctx.strokeStyle="#dfe0e4"; ctx.lineWidth=1;
+    ctx.beginPath(); ctx.moveTo(x0,yy+rowH-0.5); ctx.lineTo(x0+colW,yy+rowH-0.5); ctx.stroke();
+    let cx=x0;
+    ctx.textAlign="center"; ctx.fillStyle="#222"; ctx.font=`600 ${Math.round(u*2.5)}px sans-serif`;
+    ctx.fillText(it.nums.join('+'), cx+numW/2, yy+rowH/2); cx+=numW;
+    ctx.fillStyle=pbRGB(c); ctx.fillRect(cx+u*0.6,yy+rowH*0.24,swW-u*1.2,rowH*0.52);
+    ctx.strokeStyle="#c3c3c8"; ctx.lineWidth=1; ctx.strokeRect(cx+u*0.6+0.5,yy+rowH*0.24+0.5,swW-u*1.2-1,rowH*0.52-1); cx+=swW;
+    ctx.textAlign="left"; ctx.fillStyle="#222";
+    let fs=Math.round(u*2.4); ctx.font=`${fs}px sans-serif`;
+    while(ctx.measureText(it.name).width>nameW-u*1.2 && fs>u*1.6){ fs-=1; ctx.font=`${fs}px sans-serif`; }
+    ctx.fillText(it.name, cx+u*0.6, yy+rowH/2); cx+=nameW;
+    ctx.fillStyle="#777"; ctx.font=`${Math.round(u*2.1)}px sans-serif`;
+    ctx.fillText(`${it.cells} 区`, cx+u*0.5, yy+rowH/2); cx+=useW;
+    ctx.strokeStyle="#d9d9de"; ctx.setLineDash([u*0.8,u*0.8]); ctx.lineWidth=1;
+    ctx.strokeRect(cx+u*0.6,yy+rowH*0.2,blankW-u*1.2,rowH*0.6);
+    ctx.setLineDash([]);
+  });
+  ctx.fillStyle="#999"; ctx.textAlign="left"; ctx.font=`${Math.round(u*1.9)}px sans-serif`;
+  ctx.fillText('泡泡拼豆 · 按用量从多到少排序 · 同名已合并（一个名字只需一支）', pad, canvas.height-pad*0.45);
+  return true;
+}
+function savePaintSheet(){
+  if(!paintModel) return;
+  const cv=document.createElement('canvas');
+  if(!drawPaintSheet(cv)) return;
+  const url=cv.toDataURL('image/png');
+  const name=`颜料对照表-${paintModel.W}x${paintModel.H}.png`;
+  if(HAS_NATIVE){ Android.saveImage(url,name); }
+  else { const a=document.createElement('a'); a.download=name; a.href=url; a.click(); }
+}
+
 function syncPaint(){
   const M=paintModel, show=isPaint();
   document.getElementById('paintBar').style.display=show?'':'none';
@@ -1152,7 +1314,11 @@ function copyList(){
     const blobs=new Array(lg.list.length).fill(0);
     for(const r of M.regions){ const n=lg.nums.get(r.id); if(n) blobs[n-1]++; }
     const lines=[`数字油画色号表`,`图 ${M.W}×${M.H} · ${lg.list.length} 色 · ${M.regions.length} 个区域${pbPreview()?" · 成品":""}`,""];
-    lg.list.forEach((c,i)=>lines.push(`${i+1}号 ${pbHex(c)} · ${blobs[i]} 区`));
+    lg.list.forEach((c,i)=>lines.push(`${i+1}号 ${pbHex(c)} ≈${paintLabels(lg.list)[i]} · ${blobs[i]} 区`));
+    const sum=paintSummary(M,lg);
+    lines.push("",`颜料清单 ${sum.items.length} 支（同名共用一支，按用量排序）`);
+    sum.items.forEach(it=>lines.push(`  ${it.name} · ${it.nums.join("+")}号 · ${it.cells} 区`));
+    lines.push("色名为近似参考，以实物色卡为准");
     text=lines.join("\n");
   } else {
     const {counts,total,legend}=currentCounts();
