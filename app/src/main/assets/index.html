@@ -18,8 +18,10 @@
   label { display:flex; align-items:center; gap:4px; white-space:nowrap; }
   input[type=range] { width:110px; accent-color:var(--accent); }
   .num { min-width:26px; text-align:center; font-weight:600; }
-  input.stock { flex:1; min-width:150px; border:1px solid var(--line); border-radius:8px; padding:7px 9px; font-size:12px; color:var(--ink); }
+  input[type=text].stock { flex:1; min-width:150px; border:1px solid var(--line); border-radius:8px; padding:7px 9px; font-size:12px; color:var(--ink); }
   #stockInfo { font-size:11px; color:#999; }
+  button.mini { padding:5px 9px; font-size:12px; border-radius:6px; }
+  button.mini.on { background:var(--accent); border-color:var(--accent); color:#fff; }
   #stats { font-size:11px; color:#999; padding:6px 12px; }
   .tip { font-size:11px; color:#8a8a8e; padding:6px 12px; background:#fff; border-bottom:1px solid var(--line); }
   #stage { overflow:auto; padding:8px; }
@@ -48,13 +50,17 @@
 </div>
 <div class="bar">
   <label>限色 <input type="range" id="maxColors" min="8" max="221" value="221"><span class="num" id="maxColorsVal">221</span>色</label>
+  <button class="mini preset" data-n="72">72</button>
+  <button class="mini preset" data-n="96">96</button>
+  <button class="mini preset" data-n="144">144</button>
+  <button class="mini preset" data-n="221">221</button>
   <label><input type="checkbox" id="stockOn"> 只用我有豆</label>
   <input type="text" id="stockCodes" class="stock" placeholder="商家库存色号，如 A1 A5 F2 H7">
   <span id="stockInfo"></span>
 </div>
 <div id="stats"></div>
 <div class="tip">发代拼商家：用「保存图纸」的高清 PNG，微信选「原图」或以文件发送；普通图片会被压缩糊掉色号。</div>
-<div class="tip">商家说没有某个颜色？勾「只用我有豆」把商家色号粘进去，或拖「限色」减少颜色数（221=不限）。</div>
+<div class="tip">商家说没有某个颜色？勾「只用我有豆」把商家色号粘进去；或点 72/96/144/221 预设、拖「限色」滑杆控制颜色数（221=不限）。</div>
 <div id="stage"><canvas id="chart" class="fit"></canvas></div>
 
 <script>
@@ -183,6 +189,7 @@ function loadFile(file){
 /* ===== 像素化 + 匹配 ===== */
 function regenerate(){
   if(!srcImage) return;
+  syncPreset();
   const W=parseInt(document.getElementById('width').value);
   const H=Math.max(1,Math.round(W*srcImage.height/srcImage.width));
   const cv=document.createElement('canvas'); cv.width=W; cv.height=H;
@@ -432,6 +439,16 @@ document.getElementById('stockCodes').addEventListener('change',()=>{refreshPale
 document.getElementById('fit').addEventListener('change',e=>{
   document.getElementById('chart').classList.toggle('fit', e.target.checked);
 });
+/* 常用色预设：一键把限色设到 72/96/144/221 */
+function syncPreset(){
+  const v=curMax();
+  document.getElementById('maxColorsVal').textContent=v;
+  document.querySelectorAll('button.preset').forEach(b=>b.classList.toggle('on', parseInt(b.dataset.n)===v));
+}
+document.querySelectorAll('button.preset').forEach(b=>b.addEventListener('click',()=>{
+  document.getElementById('maxColors').value=b.dataset.n;
+  regenerate();
+}));
 if(HAS_NATIVE){ document.getElementById('ver').textContent = "MARD 221 色号 · v"+Android.version(); }
 
 loadSample();
