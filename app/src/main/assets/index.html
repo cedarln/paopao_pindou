@@ -18,6 +18,8 @@
   label { display:flex; align-items:center; gap:4px; white-space:nowrap; }
   input[type=range] { width:110px; accent-color:var(--accent); }
   .num { min-width:26px; text-align:center; font-weight:600; }
+  input.stock { flex:1; min-width:150px; border:1px solid var(--line); border-radius:8px; padding:7px 9px; font-size:12px; color:var(--ink); }
+  #stockInfo { font-size:11px; color:#999; }
   #stats { font-size:11px; color:#999; padding:6px 12px; }
   .tip { font-size:11px; color:#8a8a8e; padding:6px 12px; background:#fff; border-bottom:1px solid var(--line); }
   #stage { overflow:auto; padding:8px; }
@@ -44,8 +46,15 @@
   <label><input type="checkbox" id="dither"> 抖动</label>
   <label><input type="checkbox" id="fit" checked> 适应宽度</label>
 </div>
+<div class="bar">
+  <label>限色 <input type="range" id="maxColors" min="8" max="221" value="221"><span class="num" id="maxColorsVal">221</span>色</label>
+  <label><input type="checkbox" id="stockOn"> 只用我有豆</label>
+  <input type="text" id="stockCodes" class="stock" placeholder="商家库存色号，如 A1 A5 F2 H7">
+  <span id="stockInfo"></span>
+</div>
 <div id="stats"></div>
 <div class="tip">发代拼商家：用「保存图纸」的高清 PNG，微信选「原图」或以文件发送；普通图片会被压缩糊掉色号。</div>
+<div class="tip">商家说没有某个颜色？勾「只用我有豆」把商家色号粘进去，或拖「限色」减少颜色数（221=不限）。</div>
 <div id="stage"><canvas id="chart" class="fit"></canvas></div>
 
 <script>
@@ -109,18 +118,49 @@ const COLORS = Object.entries(PALETTE).map(([code,hex])=>{
   return {code,hex,r,g,b,lab,text:lum>150?"#333":"#fff"};
 }).sort((x,y)=> x.code[0]===y.code[0] ? parseInt(x.code.slice(1))-parseInt(y.code.slice(1)) : x.code.localeCompare(y.code));
 
+let activeColors=COLORS;
 const matchCache=new Map();
 function nearest(r,g,b){
   const key=(r<<16)|(g<<8)|b;
   if(matchCache.has(key)) return matchCache.get(key);
   const lab=rgb2lab(r,g,b);
   let best=null,bd=Infinity;
-  for(const c of COLORS){
+  for(const c of activeColors){
     const d=ciede2000(lab[0],lab[1],lab[2],c.lab[0],c.lab[1],c.lab[2]);
     if(d<bd){bd=d;best=c;}
   }
   matchCache.set(key,best);
   return best;
+}
+/* 商家库存白名单：解析粘贴的色号，只允许在这些颜色里匹配 */
+function parseStock(){
+  const raw=document.getElementById('stockCodes').value.toUpperCase();
+  const found=new Set(raw.match(/[A-M]\d{1,2}/g)||[]);
+  const valid=new Set([...found].filter(code=>PALETTE[code]));
+  return valid.size?valid:null;
+}
+function refreshPalette(){
+  const set=document.getElementById('stockOn').checked?parseStock():null;
+  activeColors=set?COLORS.filter(c=>set.has(c.code)):COLORS;
+  matchCache.clear(); // 色板变了，像素->色号缓存作废
+  updateStockInfo();
+}
+function updateStockInfo(){
+  const el=document.getElementById('stockInfo');
+  if(!document.getElementById('stockOn').checked){ el.textContent=""; return; }
+  const set=parseStock();
+  el.textContent=set?`已识别 ${set.size} 色`:"未识别到有效色号";
+}
+function curMax(){ return parseInt(document.getElementById('maxColors').value)||221; }
+function paletteNote(){
+  const parts=[];
+  if(document.getElementById('stockOn').checked){
+    const set=parseStock();
+    parts.push(set?`库存 ${set.size} 色`:"库存未生效");
+  }
+  const max=curMax();
+  if(max<221) parts.push(`限 ${max} 色`);
+  return parts.length?" · "+parts.join(" · "):"";
 }
 
 /* ===== 状态 ===== */
@@ -176,6 +216,8 @@ function regenerate(){
     }
   }
   if(document.getElementById('merge').checked) mergeRareColors(cells);
+  const max=curMax();
+  if(max<221) reduceToMaxColors(cells,max);
   grid={w:W,h:H,cells};
   render();
 }
@@ -210,6 +252,33 @@ function mergeRareColors(cells){
       const d=colorDist(from,byCode.get(code));
       if(d<bd){bd=d;best=byCode.get(code);}
     }
+    for(let i=0;i<cells.length;i++){
+      if(cells[i]&&cells[i].code===rarest) cells[i]=best;
+    }
+    counts.set(best.code,(counts.get(best.code)||0)+rc);
+    counts.delete(rarest);
+  }
+}
+/* 限色：把用到的颜色减到不超过 K 种——每轮把最少的一种并入感知色差最近的保留色 */
+function reduceToMaxColors(cells,K){
+  const counts=new Map();
+  for(const c of cells){ if(c) counts.set(c.code,(counts.get(c.code)||0)+1); }
+  const byCode=new Map(COLORS.map(c=>[c.code,c]));
+  const active=new Set(counts.keys());
+  while(active.size>K){
+    let rarest=null,rc=Infinity;
+    for(const code of active){
+      const n=counts.get(code);
+      if(n<rc){rc=n;rarest=code;}
+    }
+    active.delete(rarest);
+    const from=byCode.get(rarest);
+    let best=null,bd=Infinity;
+    for(const code of active){
+      const d=colorDist(from,byCode.get(code));
+      if(d<bd){bd=d;best=byCode.get(code);}
+    }
+    if(!best) break;
     for(let i=0;i<cells.length;i++){
       if(cells[i]&&cells[i].code===rarest) cells[i]=best;
     }
@@ -304,9 +373,10 @@ function drawChart(canvas, cell){
     }
   });
   ctx.fillStyle="#999"; ctx.font=`${Math.max(5,Math.round(cell*0.38))}px sans-serif`; ctx.textAlign="left";
-  ctx.fillText(`色号体系 MARD 221（A~M）· 配色以实物色卡为准`, 4, canvas.height-footH/2);
+  const stockActive=document.getElementById('stockOn').checked && parseStock();
+  ctx.fillText(stockActive?`色号范围：商家库存 ${activeColors.length} 色 · 配色以实物色卡为准`:`色号体系 MARD 221（A~M）· 配色以实物色卡为准`, 4, canvas.height-footH/2);
   document.getElementById('stats').textContent =
-    `${w}×${h} 格 · ${total} 颗豆 · ${legend.length} 种色号 · 双指缩放查看色号`;
+    `${w}×${h} 格 · ${total} 颗豆 · ${legend.length} 种色号${paletteNote()} · 双指缩放查看色号`;
 }
 
 /* ===== 导出 / 分享 / 清单 / 更新 ===== */
@@ -354,6 +424,11 @@ document.getElementById('width').addEventListener('input',e=>{document.getElemen
 document.getElementById('width').addEventListener('change',regenerate);
 document.getElementById('dither').addEventListener('change',regenerate);
 document.getElementById('merge').addEventListener('change',regenerate);
+document.getElementById('maxColors').addEventListener('input',e=>{document.getElementById('maxColorsVal').textContent=e.target.value;});
+document.getElementById('maxColors').addEventListener('change',regenerate);
+document.getElementById('stockOn').addEventListener('change',()=>{refreshPalette();regenerate();});
+document.getElementById('stockCodes').addEventListener('input',updateStockInfo);
+document.getElementById('stockCodes').addEventListener('change',()=>{refreshPalette();regenerate();});
 document.getElementById('fit').addEventListener('change',e=>{
   document.getElementById('chart').classList.toggle('fit', e.target.checked);
 });
