@@ -30,6 +30,24 @@
   #chart { background:#fff; box-shadow:0 1px 4px rgba(0,0,0,.08); display:block; image-rendering:pixelated; }
   #chart.fit { width:100%; height:auto; }
   #empty { text-align:center; color:#aaa; font-size:13px; padding:40px 20px; }
+  /* 顶层模式切换：模式卡片 */
+  #modeCards { display:flex; gap:10px; padding:12px; background:#fff; border-bottom:1px solid var(--line); }
+  .mcard { flex:1; border:1px solid var(--line); border-radius:12px; padding:10px; background:#fbfbfd; cursor:pointer; }
+  .mcard.on { border-color:var(--accent); box-shadow:0 0 0 2px rgba(224,82,110,.15); background:#fff; }
+  .mcard .mt { font-size:15px; font-weight:700; margin-bottom:3px; }
+  .mcard.on .mt { color:var(--accent); }
+  .mcard .md { font-size:11px; color:#9a9a9e; line-height:1.5; min-height:32px; }
+  .mcard .mprev { margin-top:8px; height:64px; border-radius:8px; border:1px solid var(--line); background:#fff; overflow:hidden; }
+  .mcard .mprev svg { display:block; width:100%; height:100%; }
+  /* 自由调色盘 */
+  .tray { gap:6px; flex-wrap:nowrap; }
+  #trayLabel { font-size:11px; color:#999; white-space:nowrap; }
+  #tray { display:flex; flex:1 1 auto; min-width:0; flex-wrap:nowrap; overflow-x:auto; -webkit-overflow-scrolling:touch; gap:5px; align-items:center; padding-bottom:2px; }
+  .sw { flex:0 0 auto; width:24px; height:24px; border-radius:7px; border:1px solid rgba(0,0,0,.18); cursor:pointer; padding:0; }
+  .sw.on { outline:2px solid var(--accent); outline-offset:1px; }
+  .sw.auto { width:auto; padding:0 9px; font-size:11px; background:#fff; color:var(--ink); }
+  #customColor { width:30px; height:26px; padding:0; border:1px solid var(--line); border-radius:7px; background:#fff; }
+  .pick { display:flex; align-items:center; gap:4px; font-size:11px; color:#666; white-space:nowrap; flex:0 0 auto; }
 </style>
 </head>
 <body>
@@ -37,31 +55,61 @@
   <h1>泡泡拼豆 <small id="ver">MARD 221 色号</small></h1>
   <button onclick="checkUpdate()">检查更新</button>
 </header>
+
+
+<!-- 顶层模式：拼豆图纸 / 数字油画（两个模式平级，卡片即切换入口） -->
+<div id="modeCards">
+  <div class="mcard" data-m="bead" onclick="setMode('bead')">
+    <div class="mt">拼豆图纸</div>
+    <div class="md">按色号数豆、备料，发代拼商家</div>
+    <div class="mprev"><svg viewBox="0 0 60 30" preserveAspectRatio="none">
+      <rect x="0" y="0" width="20" height="15" fill="#f6d365"/><rect x="20" y="0" width="20" height="15" fill="#f0a35e"/><rect x="40" y="0" width="20" height="15" fill="#fbe9b8"/>
+      <rect x="0" y="15" width="20" height="15" fill="#8ec9a3"/><rect x="20" y="15" width="20" height="15" fill="#4c9e7a"/><rect x="40" y="15" width="20" height="15" fill="#f6d365"/>
+      <path d="M20 0V30M40 0V30M0 15H60" stroke="#c9c9c9" stroke-width=".7"/><path d="M0 0H60V30H0Z" stroke="#e0526e" stroke-width="1.1" fill="none"/>
+      <text x="4" y="10" font-size="6" fill="#7a5b00">A5</text><text x="24" y="25" font-size="6" fill="#0e4d33">H7</text>
+    </svg></div>
+  </div>
+  <div class="mcard" data-m="pbn" onclick="setMode('pbn')">
+    <div class="mt">数字油画</div>
+    <div class="md">曲线分区在线填色，可自取颜色</div>
+    <div class="mprev"><svg viewBox="0 0 60 30" preserveAspectRatio="none">
+      <rect width="60" height="30" fill="#e3e4e9"/>
+      <path d="M4 22C10 8 26 4 34 12s14 4 20-2v22H4Z" fill="#8ec9a3" stroke="#4a4a52" stroke-width=".8"/>
+      <path d="M10 26c6-10 20-8 24 0Z" fill="#f6d365" stroke="#4a4a52" stroke-width=".8"/>
+      <circle cx="44" cy="9" r="6" fill="#f0a35e" stroke="#4a4a52" stroke-width=".8"/>
+      <text x="41" y="11" font-size="5" fill="#5c2d00">3</text><text x="18" y="21" font-size="5" fill="#5b4400">2</text>
+    </svg></div>
+  </div>
+</div>
+
 <div class="bar">
   <button class="primary" onclick="document.getElementById('file').click()">上传图片</button>
   <input type="file" id="file" accept="image/*" style="display:none">
-  <button onclick="savePNG()">保存图纸</button>
+  <button onclick="savePNG()" id="btnSave">保存图纸</button>
   <button onclick="sharePNG()">分享</button>
-  <button onclick="copyList()">备料清单</button>
-  <label><input type="checkbox" id="paintOn"> 数字油画</label>
+  <button onclick="copyList()" id="btnList">备料清单</button>
 </div>
-<div class="bar">
-  <label>宽度 <input type="range" id="width" min="16" max="120" value="50"><span class="num" id="widthVal">50</span>格</label>
-  <label><input type="checkbox" id="merge" checked> 减色</label>
-  <label><input type="checkbox" id="dither"> 抖动</label>
-  <label><input type="checkbox" id="fit" checked> 适应宽度</label>
+
+<div id="beadGroup">
+  <div class="bar">
+    <label>宽度 <input type="range" id="width" min="16" max="120" value="50"><span class="num" id="widthVal">50</span>格</label>
+    <label><input type="checkbox" id="merge" checked> 减色</label>
+    <label><input type="checkbox" id="dither"> 抖动</label>
+    <label><input type="checkbox" id="fit" checked> 适应宽度</label>
+  </div>
+  <div class="bar">
+    <label>限色 <input type="range" id="maxColors" min="8" max="221" value="221"><span class="num" id="maxColorsVal">221</span>色</label>
+    <button class="mini preset" data-n="72">72</button>
+    <button class="mini preset" data-n="96">96</button>
+    <button class="mini preset" data-n="144">144</button>
+    <button class="mini preset" data-n="221">221</button>
+    <span id="curColors"></span>
+    <label><input type="checkbox" id="stockOn"> 只用我有豆</label>
+    <input type="text" id="stockCodes" class="stock" placeholder="商家库存色号，如 A1 A5 F2 H7">
+    <span id="stockInfo"></span>
+  </div>
 </div>
-<div class="bar">
-  <label>限色 <input type="range" id="maxColors" min="8" max="221" value="221"><span class="num" id="maxColorsVal">221</span>色</label>
-  <button class="mini preset" data-n="72">72</button>
-  <button class="mini preset" data-n="96">96</button>
-  <button class="mini preset" data-n="144">144</button>
-  <button class="mini preset" data-n="221">221</button>
-  <span id="curColors"></span>
-  <label><input type="checkbox" id="stockOn"> 只用我有豆</label>
-  <input type="text" id="stockCodes" class="stock" placeholder="商家库存色号，如 A1 A5 F2 H7">
-  <span id="stockInfo"></span>
-</div>
+
 <div class="bar" id="paintBar" style="display:none">
   <label>精细度 <input type="range" id="fine" min="1" max="5" value="3"><span class="num" id="fineVal">标准</span></label>
   <button class="mini" onclick="paintUndo()">撤销</button>
@@ -70,10 +118,16 @@
   <label><input type="checkbox" id="pbPreview"> 预览成品</label>
   <span id="paintProg"></span>
 </div>
+<div class="bar tray" id="trayBar" style="display:none">
+  <span id="trayLabel">画笔</span>
+  <span id="tray"></span>
+  <label class="pick">＋自选<input type="color" id="customColor" value="#e0526e"></label>
+</div>
+
 <div id="stats"></div>
-<div class="tip">发代拼商家：用「保存图纸」的高清 PNG，微信选「原图」或以文件发送；普通图片会被压缩糊掉色号。</div>
-<div class="tip">商家说没有某个颜色？勾「只用我有豆」把商家色号粘进去；或点 72/96/144/221 预设、拖「限色」滑杆控制颜色数（221=不限）。</div>
-<div class="tip" id="paintTip" style="display:none">数字油画：勾上后画面按颜色自动分成曲线区域，点一下区域就填上画面本身的颜色，双指放大能填很小的区域；「精细度」越高区域越多越小，勾「预览成品」直接看填完的样子。这个模式跟拼豆图纸无关，出来的图不含色号。</div>
+<div class="tip" id="tipBead1">发代拼商家：用「保存图纸」的高清 PNG，微信选「原图」或以文件发送；普通图片会被压缩糊掉色号。</div>
+<div class="tip" id="tipBead2">商家说没有某个颜色？勾「只用我有豆」把商家色号粘进去；或点 72/96/144/221 预设、拖「限色」滑杆控制颜色数（221=不限）。</div>
+<div class="tip" id="paintTip" style="display:none">数字油画：画面按颜色自动分成曲线区域。画笔选「自动」点一下就填上该区域本身的颜色；选下面任意色块（或用吸管自选颜色）就能把任意区域涂成你想要的颜色。「精细度」越高区域越多越小，双指放大填小区域；勾「预览成品」直接看填完的样子。</div>
 <div id="stage"><canvas id="chart" class="fit"></canvas></div>
 
 <script>
@@ -186,22 +240,60 @@ function paletteNote(numUsed){
 let srcImage=null;
 let grid=null;
 
+/* ===== 顶层模式：拼豆图纸 / 数字油画（平级）===== */
+let mode='bead';            // 'bead'=拼豆图纸 | 'pbn'=数字油画
+let brush=null;             // null=自动填画面本色；[r,g,b]=自选颜色
+let customSwatches=[];      // 自选过的颜色（本次会话内保留）
+function isPaint(){ return mode==='pbn'; }
+function setMode(m){
+  if(m===mode){ syncModeUI(); return; }
+  mode=m;
+  syncModeUI();
+  regenerate();
+}
+function syncModeUI(){
+  const show=isPaint();
+  document.getElementById('beadGroup').style.display=show?'none':'';
+  document.getElementById('tipBead1').style.display=show?'none':'';
+  document.getElementById('tipBead2').style.display=show?'none':'';
+  document.getElementById('paintBar').style.display=show?'':'none';
+  document.getElementById('trayBar').style.display=show?'':'none';
+  document.getElementById('paintTip').style.display=show?'':'none';
+  document.getElementById('btnSave').textContent=show?'保存成品':'保存图纸';
+  document.getElementById('btnList').textContent=show?'色号表':'备料清单';
+  document.querySelectorAll('#modeCards .mcard').forEach(el=>{
+    el.classList.toggle('on', el.dataset.m==='pbn'?show:!show);
+  });
+  document.getElementById('ver').textContent = show
+    ? (HAS_NATIVE?"数字油画 · v"+Android.version():"数字油画")
+    : (HAS_NATIVE?"MARD 221 色号 · v"+Android.version():"MARD 221 色号");
+  renderTray();
+}
+
+
 function loadSample(){
   const img=new Image();
-  img.onload=()=>{ srcImage=img; regenerate(); };
+  img.onload=()=>{ srcImage=img; srcToken++; regenerate(); };
   img.src=SAMPLE_IMG;
 }
 function loadFile(file){
   if(!file || !file.type.startsWith('image/')) return;
   const url=URL.createObjectURL(file);
   const img=new Image();
-  img.onload=()=>{ srcImage=img; regenerate(); URL.revokeObjectURL(url); };
+  img.onload=()=>{ srcImage=img; srcToken++; regenerate(); URL.revokeObjectURL(url); };
   img.src=url;
 }
 
 /* ===== 像素化 + 匹配 ===== */
 function regenerate(){
   if(!srcImage) return;
+  if(isPaint()){
+    grid=null;
+    if(!paintModel || paintKey!==curPaintKey()){ paintModel=buildPaint(); paintKey=curPaintKey(); }
+    render();
+    syncPreset();
+    return;
+  }
   const W=parseInt(document.getElementById('width').value);
   const H=Math.max(1,Math.round(W*srcImage.height/srcImage.width));
   const cv=document.createElement('canvas'); cv.width=W; cv.height=H;
@@ -238,7 +330,6 @@ function regenerate(){
   const max=curMax();
   if(max<221) reduceToMaxColors(cells,max);
   grid={w:W,h:H,cells};
-  paintModel=isPaint()?buildPaint():null;
   render();
   syncPreset();
 }
@@ -317,8 +408,37 @@ const FINE_NAME=['粗略','较简','标准','细致','极细'];
 const FINE_THIN=[1.2,1.1,1.0,0.9,0.8];   // 面积/周长低于此值的细长条并进邻居
 const PB_RENDER_W=2400, PB_EXPORT_W=2800;
 let paintModel=null, paintGeom={s:1,margin:0,titleH:0};
+let srcToken=0, paintKey='';   // 换图或改精细度才重建模型，切模式不丢已填的颜色
+function curPaintKey(){ return srcToken+':'+fineLevel(); }
 function fineLevel(){ return Math.min(5,Math.max(1,parseInt(document.getElementById('fine').value)||3)); }
-function isPaint(){ return document.getElementById('paintOn').checked; }
+/* 区域实际显示的颜色：自选色 > 已填的画面本色 > 未填 */
+function pbApplied(M,r){
+  const c=M.custom.get(r.id);
+  if(c) return c;
+  return M.filled.has(r.id)?r.color:null;
+}
+/* 编号表：线稿/填色中=画面全色板（未填区域也要有编号可对照），成品预览=最终实际用色 */
+function pbLegend(M,kind){
+  const list=[],numOf=new Map();
+  const key=c=>c.join(',');
+  const put=c=>{ const k=key(c); if(!numOf.has(k)){ numOf.set(k,list.length+1); list.push(c); } };
+  const eff=r=>M.custom.get(r.id)||r.color;
+  if(kind==='blank') M.colors.forEach(put);
+  else if(kind==='preview'){
+    const used=new Set(); for(const r of M.regions) used.add(key(eff(r)));
+    for(const c of M.colors) if(used.has(key(c))) put(c);
+    for(const r of M.regions) if(M.custom.has(r.id)) put(eff(r));
+  } else {
+    for(const c of M.colors) put(c);
+    for(const r of M.regions) if(M.custom.has(r.id)) put(eff(r));
+  }
+  const nums=new Map();
+  for(const r of M.regions){
+    const c = kind==='blank' ? r.color : (kind==='preview' ? eff(r) : (pbApplied(M,r)||eff(r)));
+    nums.set(r.id, numOf.get(key(c)));
+  }
+  return {list,nums};
+}
 
 function pbgBoxBlur(src,W,H){
   const tmp=new Float32Array(src.length), out=new Float32Array(src.length);
@@ -704,7 +824,7 @@ function buildPaint(){
     for(const p of r.cells) if(d[p]>bv){ bv=d[p]; bi=p; }
     r.labelX=(bi%W)+0.5; r.labelY=((bi/W)|0)+0.5; r.radius=bv;
   }
-  const model={W,H,n,rid,regions,colors,filled:new Set(),order:[]};
+  const model={W,H,n,rid,regions,colors,filled:new Set(),custom:new Map(),order:[]};
   model.borders=pbBorderChains(model);
   return model;
 }
@@ -723,13 +843,15 @@ function pbPath(ctx,loops,s){
 function drawPaint(canvas, widthPx, blank){
   const M=paintModel; if(!M) return false;
   const preview=!blank && pbPreview();      // 预览成品＝把所有区域都填上
+  const kind=blank?'blank':(preview?'preview':'work');
+  const lg=pbLegend(M,kind);
   const s=Math.max(2,Math.floor(widthPx/M.W));
   const margin=Math.round(s*3), titleH=Math.round(s*8);
   const cw=M.W*s;
   const unit=cw/100;                       // 标题/图例按画幅宽度定字号，缩放到手机宽度也读得清
   const chipW=Math.round(unit*12), chipH=Math.round(unit*3.6), chipGap=Math.round(unit*1.2);
   const perRow=Math.max(1,Math.floor(cw/(chipW+chipGap)));
-  const legendRows=Math.ceil(M.colors.length/perRow);
+  const legendRows=Math.ceil(lg.list.length/perRow);
   const legendH=legendRows*(chipH+chipGap)+chipGap;
   const footH=Math.round(unit*4);
   canvas.width=M.W*s+margin*2;
@@ -739,17 +861,19 @@ function drawPaint(canvas, widthPx, blank){
   ctx.fillStyle="#fff"; ctx.fillRect(0,0,canvas.width,canvas.height);
   ctx.save(); ctx.translate(margin,margin+titleH);
   ctx.beginPath(); ctx.rect(0,0,M.W*s,M.H*s); ctx.clip();       // 所有绘制都框在画面里，溢色不会跑到留白
-  const on=r=>!blank && (preview || M.filled.has(r.id));
+  const ac=r=>blank?null:(preview||(M.filled.has(r.id)) ? (M.custom.get(r.id)||r.color) : null);
+  const rgb=c=>`rgb(${c[0]},${c[1]},${c[2]})`;
   ctx.fillStyle="#e3e4e9"; ctx.fillRect(0,0,M.W*s,M.H*s);        // 先铺底色，区域之间绝不留白缝
   for(const r of M.regions){
-    if(!on(r)) continue;
-    ctx.fillStyle=`rgb(${r.color[0]},${r.color[1]},${r.color[2]})`;
+    const c=ac(r); if(!c) continue;
+    ctx.fillStyle=rgb(c);
     ctx.beginPath(); pbPath(ctx,r.loops,s); ctx.fill('evenodd');
   }
   // 用各自的颜色描一遍边，把区域之间的细小缝隙盖掉
   ctx.lineJoin="round"; ctx.lineCap="round"; ctx.lineWidth=Math.max(1,s*0.8);
   for(const r of M.regions){
-    ctx.strokeStyle=on(r)?`rgb(${r.color[0]},${r.color[1]},${r.color[2]})`:"#e3e4e9";
+    const c=ac(r);
+    ctx.strokeStyle=c?rgb(c):"#e3e4e9";
     ctx.beginPath(); pbPath(ctx,r.loops,s); ctx.stroke();
   }
   // 分区线：全局只算一次、只画一次，相邻区域共用同一条曲线；成品预览时不画线
@@ -764,9 +888,9 @@ function drawPaint(canvas, widthPx, blank){
   ctx.textAlign="center"; ctx.textBaseline="middle";
   for(const r of M.regions){
     if(preview || r.radius*s<6) continue;   // 成品不叠编号
-    const c=on(r)?r.color:[227,228,233];
+    const c=ac(r)||[227,228,233];
     const lum=0.299*c[0]+0.587*c[1]+0.114*c[2];
-    const t=String(r.num);
+    const t=String(lg.nums.get(r.id));
     ctx.font=`600 ${Math.max(4,Math.min(r.radius*s*0.8,s*6)).toFixed(1)}px sans-serif`;
     ctx.lineWidth=Math.max(1,s*0.24);
     ctx.strokeStyle=lum>140?"rgba(0,0,0,.35)":"rgba(255,255,255,.85)";
@@ -779,12 +903,12 @@ function drawPaint(canvas, widthPx, blank){
   ctx.font=`bold ${Math.round(unit*3.4)}px sans-serif`;
   const done=blank?0:M.filled.size;
   const head=blank?"数字油画线稿":(preview?"数字油画成品":"数字油画");
-  ctx.fillText(`${head} · ${M.W}×${M.H} · ${M.colors.length} 色 · ${M.regions.length} 个区域${blank||preview?"":" · 已填 "+done}`, margin, margin+titleH*0.5);
+  ctx.fillText(`${head} · ${M.W}×${M.H} · ${lg.list.length} 色 · ${M.regions.length} 个区域${blank||preview?"":" · 已填 "+done}`, margin, margin+titleH*0.5);
   const ly=margin+titleH+M.H*s+chipGap*2;
-  M.colors.forEach((c,i)=>{
+  lg.list.forEach((c,i)=>{
     const col=i%perRow, row=(i/perRow)|0;
     const lx=margin+col*(chipW+chipGap), yy=ly+row*(chipH+chipGap);
-    ctx.fillStyle=`rgb(${c[0]},${c[1]},${c[2]})`; ctx.fillRect(lx,yy,chipW,chipH);
+    ctx.fillStyle=rgb(c); ctx.fillRect(lx,yy,chipW,chipH);
     ctx.strokeStyle="#bbb"; ctx.lineWidth=0.5; ctx.strokeRect(lx+0.25,yy+0.25,chipW,chipH);
     const lum=0.299*c[0]+0.587*c[1]+0.114*c[2];
     ctx.fillStyle=lum>140?"#22252b":"#ffffff";
@@ -793,9 +917,12 @@ function drawPaint(canvas, widthPx, blank){
   });
   ctx.fillStyle="#999"; ctx.textAlign="left";
   ctx.font=`${Math.round(unit*2.6)}px sans-serif`;
-  ctx.fillText(blank?"按编号填色 · 编号对应下方色块":(preview?"成品预览 · 取消「预览成品」继续填色":"点区域填色 · 双指缩放填小区域"), margin, canvas.height-footH*0.4);
+  ctx.fillText(blank?"按编号填色 · 编号对应下方色块":(preview?"成品预览 · 取消「预览成品」继续填色":"点区域填色 · 画笔可选自动或自选颜色"), margin, canvas.height-footH*0.4);
   return true;
 }
+function pbSame(a,b){ return !!a&&!!b&&a[0]===b[0]&&a[1]===b[1]&&a[2]===b[2]; }
+function pbRGB(c){ return `rgb(${c[0]},${c[1]},${c[2]})`; }
+function pbHex(c){ return "#"+c.map(v=>v.toString(16).padStart(2,"0")).join(""); }
 function pbFillAt(clientX,clientY){
   const M=paintModel; if(!M) return;
   const cv=document.getElementById('chart'), rc=cv.getBoundingClientRect();
@@ -804,19 +931,63 @@ function pbFillAt(clientX,clientY){
   const y=Math.floor(((clientY-rc.top)*(cv.height/rc.height)-paintGeom.margin-paintGeom.titleH)/paintGeom.s);
   if(x<0||y<0||x>=M.W||y>=M.H) return;
   const id=M.rid[y*M.W+x];
-  if(id<0||M.filled.has(id)) return;
-  M.filled.add(id); M.order.push(id);
+  if(id<0) return;
+  const r=M.regions[id];
+  const target=brush?brush.slice():r.color;         // 自动=画面本色，自选=画笔颜色
+  const cur=pbApplied(M,r);
+  if(cur && pbSame(cur,target)) return;             // 颜色没变就别记一步历史
+  M.order.push({id,prevFilled:M.filled.has(id),prevCustom:M.custom.has(id)?M.custom.get(id).slice():undefined});
+  M.filled.add(id);
+  if(brush && !pbSame(brush,r.color)) M.custom.set(id,brush.slice()); else M.custom.delete(id);
   render();
 }
 function paintUndo(){
   const M=paintModel; if(!M||!M.order.length) return;
-  M.filled.delete(M.order.pop());
+  const e=M.order.pop();
+  if(e.prevFilled) M.filled.add(e.id); else M.filled.delete(e.id);
+  if(e.prevCustom===undefined) M.custom.delete(e.id);
+  else if(e.prevCustom) M.custom.set(e.id,e.prevCustom);
   render();
 }
 function paintReset(){
   const M=paintModel; if(!M) return;
-  M.filled.clear(); M.order.length=0;
+  M.filled.clear(); M.custom.clear(); M.order.length=0;
   render();
+}
+/* 调色盘：自动 + 画面出现的颜色 + 自选过的颜色 */
+function setBrush(c){
+  if(!c) brush=null;
+  else {
+    brush=c.slice();
+    // 不在画面色板里的颜色留在调色盘上，随时能选回来
+    if(!customSwatches.some(p=>pbSame(p,brush)) && !(paintModel&&paintModel.colors.some(p=>pbSame(p,brush)))){
+      customSwatches.unshift(brush);
+      if(customSwatches.length>12) customSwatches.length=12;
+    }
+  }
+  renderTray();
+}
+function pbSwatch(c,label){
+  const b=document.createElement('button');
+  b.className='sw'+(brush&&pbSame(brush,c)?' on':'');
+  b.style.background=pbRGB(c);
+  b.title=(label||'自选色')+' '+pbHex(c)+'（点它当画笔）';
+  b.onclick=()=>setBrush(c);
+  return b;
+}
+function renderTray(){
+  const wrap=document.getElementById('tray'); if(!wrap) return;
+  wrap.innerHTML='';
+  if(!isPaint()) return;
+  const auto=document.createElement('button');
+  auto.className='sw auto'+(brush?'':' on');
+  auto.textContent='自动 · 画面本色';
+  auto.onclick=()=>setBrush(null);
+  wrap.appendChild(auto);
+  const pal=paintModel?paintModel.colors:[];
+  pal.forEach(c=>wrap.appendChild(pbSwatch(c,'画面色')));
+  customSwatches.forEach(c=>{ if(!pal.some(p=>pbSame(p,c))) wrap.appendChild(pbSwatch(c,'自选色')); });
+  document.getElementById('trayLabel').textContent=brush?'自选色':'画笔';
 }
 function paintDataURL(blank){
   const cv=document.createElement('canvas');
@@ -831,17 +1002,20 @@ function saveLineArt(){
   else { const a=document.createElement('a'); a.download=name; a.href=url; a.click(); }
 }
 function syncPaint(){
-  const M=paintModel, bar=document.getElementById('paintBar'), tip=document.getElementById('paintTip');
-  const show=isPaint();
-  bar.style.display=show?'':'none';
-  tip.style.display=show?'':'none';
+  const M=paintModel, show=isPaint();
+  document.getElementById('paintBar').style.display=show?'':'none';
+  document.getElementById('trayBar').style.display=show?'':'none';
+  document.getElementById('paintTip').style.display=show?'':'none';
   if(!show||!M){ document.getElementById('paintProg').textContent=''; return; }
   document.getElementById('fineVal').textContent=FINE_NAME[fineLevel()-1];
+  const customN=M.custom.size;
   document.getElementById('paintProg').textContent=
-    `共 ${M.regions.length} 区 · 已填 ${M.filled.size} · 剩 ${M.regions.length-M.filled.size}`;
+    `共 ${M.regions.length} 区 · 已填 ${M.filled.size}${customN?` · 自选 ${customN} 区`:''} · 剩 ${M.regions.length-M.filled.size}`;
+  const lg=pbLegend(M,pbPreview()?'preview':'work');
   document.getElementById('stats').textContent=
-    `数字油画 · ${M.W}×${M.H} · ${M.colors.length} 色 · ${M.regions.length} 个区域 · `+
-    (pbPreview()?'成品预览（无线稿、无编号）':`已填 ${M.filled.size}，双指缩放填小区域`);
+    `数字油画 · ${M.W}×${M.H} · ${lg.list.length} 色 · ${M.regions.length} 个区域 · `+
+    (pbPreview()?'成品预览（无线稿、无编号）':`已填 ${M.filled.size}，画笔可自动或自选颜色`);
+  renderTray();
 }
 
 /* ===== 图纸渲染 ===== */
@@ -948,13 +1122,16 @@ function exportDataURL(){
 function fileName(){
   if(isPaint()&&paintModel){
     const M=paintModel;
-    return pbPreview()?`数字油画-成品-${M.W}x${M.H}.png`:`数字油画-${M.W}x${M.H}-${M.filled.size}区.png`;
+    const customN=M.custom.size;
+    return pbPreview()?`数字油画-成品-${M.W}x${M.H}.png`
+      :`数字油画-${M.W}x${M.H}-${M.filled.size}区${customN?"-自选"+customN+"区":""}.png`;
   }
+  if(!grid) return "拼豆图纸.png";
   return `拼豆图纸-MARD-${grid.w}x${grid.h}.png`;
 }
 
 function savePNG(){
-  if(!grid) return;
+  if(!srcImage) return;
   const url=exportDataURL();
   if(HAS_NATIVE){ Android.saveImage(url, fileName()); }
   else { const a=document.createElement('a'); a.download=fileName(); a.href=url; a.click(); }
@@ -968,14 +1145,14 @@ function sharePNG(){
   } else { savePNG(); }
 }
 function copyList(){
-  if(!grid) return;
+  if(!srcImage) return;
   let text;
   if(isPaint()&&paintModel){
-    const M=paintModel, blobs=new Array(M.colors.length).fill(0);
-    for(const r of M.regions) blobs[r.num-1]++;
-    const hex=c=>"#"+c.map(v=>v.toString(16).padStart(2,"0")).join("");
-    const lines=[`数字油画色号表`,`图 ${M.W}×${M.H} · ${M.colors.length} 色 · ${M.regions.length} 个区域${pbPreview()?" · 成品":""}`,""];
-    M.colors.forEach((c,i)=>lines.push(`${i+1}号 ${hex(c)} · ${blobs[i]} 区`));
+    const M=paintModel, lg=pbLegend(M,pbPreview()?'preview':'work');
+    const blobs=new Array(lg.list.length).fill(0);
+    for(const r of M.regions){ const n=lg.nums.get(r.id); if(n) blobs[n-1]++; }
+    const lines=[`数字油画色号表`,`图 ${M.W}×${M.H} · ${lg.list.length} 色 · ${M.regions.length} 个区域${pbPreview()?" · 成品":""}`,""];
+    lg.list.forEach((c,i)=>lines.push(`${i+1}号 ${pbHex(c)} · ${blobs[i]} 区`));
     text=lines.join("\n");
   } else {
     const {counts,total,legend}=currentCounts();
@@ -998,8 +1175,6 @@ document.getElementById('width').addEventListener('input',e=>{document.getElemen
 document.getElementById('width').addEventListener('change',regenerate);
 document.getElementById('dither').addEventListener('change',regenerate);
 document.getElementById('merge').addEventListener('change',regenerate);
-/* 数字油画：勾选后才建模型；取消勾选回到拼豆图纸 */
-document.getElementById('paintOn').addEventListener('change',()=>regenerate());
 /* 预览成品：直接看填完的样子，不重新算模型 */
 document.getElementById('pbPreview').addEventListener('change',render);
 document.getElementById('fine').addEventListener('input',e=>{document.getElementById('fineVal').textContent=FINE_NAME[fineLevel()-1];});
@@ -1048,8 +1223,17 @@ document.querySelectorAll('button.preset').forEach(b=>b.addEventListener('click'
   document.getElementById('maxColors').value=b.dataset.n;
   regenerate();
 }));
+/* 自选颜色：吸管选完即作为当前画笔，并留在调色盘里 */
+document.getElementById('customColor').addEventListener('input',e=>{
+  const h=e.target.value;
+  const c=[parseInt(h.slice(1,3),16),parseInt(h.slice(3,5),16),parseInt(h.slice(5,7),16)];
+  if(!customSwatches.some(p=>pbSame(p,c))) customSwatches.unshift(c);
+  if(customSwatches.length>12) customSwatches.length=12;
+  setBrush(c);
+});
 if(HAS_NATIVE){ document.getElementById('ver').textContent = "MARD 221 色号 · v"+Android.version(); }
 
+syncModeUI();
 loadSample();
 </script>
 </body>
