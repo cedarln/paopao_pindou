@@ -43,8 +43,7 @@
   <button onclick="savePNG()">保存图纸</button>
   <button onclick="sharePNG()">分享</button>
   <button onclick="copyList()">备料清单</button>
-  <label><input type="checkbox" id="pbnOn"> 数字油画</label>
-  <label><input type="checkbox" id="paintOn"> 在线填色</label>
+  <label><input type="checkbox" id="paintOn"> 数字油画</label>
 </div>
 <div class="bar">
   <label>宽度 <input type="range" id="width" min="16" max="120" value="50"><span class="num" id="widthVal">50</span>格</label>
@@ -68,13 +67,13 @@
   <button class="mini" onclick="paintUndo()">撤销</button>
   <button class="mini" onclick="paintReset()">重置</button>
   <button class="mini" onclick="saveLineArt()">导出空白线稿</button>
+  <label><input type="checkbox" id="pbPreview"> 预览成品</label>
   <span id="paintProg"></span>
 </div>
 <div id="stats"></div>
 <div class="tip">发代拼商家：用「保存图纸」的高清 PNG，微信选「原图」或以文件发送；普通图片会被压缩糊掉色号。</div>
 <div class="tip">商家说没有某个颜色？勾「只用我有豆」把商家色号粘进去；或点 72/96/144/221 预设、拖「限色」滑杆控制颜色数（221=不限）。</div>
-<div class="tip">数字油画模式：按颜色分区、每区标编号，图例给「编号→MARD色号」；色数默认 24，可用「限色」调节。</div>
-<div class="tip" id="paintTip" style="display:none">在线填色：点一下区域就填上画面本身的颜色，双指放大能填很小的区域；「精细度」越高区域越多越小。这个模式跟拼豆图纸无关，出来的图不含色号。</div>
+<div class="tip" id="paintTip" style="display:none">数字油画：勾上后画面按颜色自动分成曲线区域，点一下区域就填上画面本身的颜色，双指放大能填很小的区域；「精细度」越高区域越多越小，勾「预览成品」直接看填完的样子。这个模式跟拼豆图纸无关，出来的图不含色号。</div>
 <div id="stage"><canvas id="chart" class="fit"></canvas></div>
 
 <script>
@@ -210,8 +209,7 @@ function regenerate(){
   cx.imageSmoothingEnabled=true; cx.imageSmoothingQuality='high';
   cx.drawImage(srcImage,0,0,W,H);
   const data=cx.getImageData(0,0,W,H).data;
-  const pbn=document.getElementById('pbnOn').checked;
-  const dither=document.getElementById('dither').checked && !pbn; // 油画模式不用抖动
+  const dither=document.getElementById('dither').checked;
   const buf=new Float32Array(W*H*3);
   for(let i=0;i<W*H;i++){ buf[i*3]=data[i*4]; buf[i*3+1]=data[i*4+1]; buf[i*3+2]=data[i*4+2]; }
   const cells=new Array(W*H).fill(null);
@@ -236,13 +234,9 @@ function regenerate(){
       }
     }
   }
-  if(pbn){
-    reduceToMaxColors(cells, pbnK()); // 油画模式：直接限到目标色数
-  } else {
-    if(document.getElementById('merge').checked) mergeRareColors(cells);
-    const max=curMax();
-    if(max<221) reduceToMaxColors(cells,max);
-  }
+  if(document.getElementById('merge').checked) mergeRareColors(cells);
+  const max=curMax();
+  if(max<221) reduceToMaxColors(cells,max);
   grid={w:W,h:H,cells};
   paintModel=isPaint()?buildPaint():null;
   render();
@@ -314,168 +308,7 @@ function reduceToMaxColors(cells,K){
   }
 }
 
-/* ===== 数字油画管线（方案A：区域填色 + 编号 + 色号图例） ===== */
-function pbnK(){ const m=curMax(); return m<221?m:24; }
-function buildRegions(cells,W,H){
-  const N=W*H;
-  const minArea=Math.max(6,Math.round(N*0.004));
-  const label=new Int32Array(N).fill(-1);
-  const compCode=[]; let nc=0;
-  for(let i=0;i<N;i++){
-    if(!cells[i]||label[i]>=0) continue;
-    const code=cells[i].code; const stack=[i]; label[i]=nc;
-    while(stack.length){
-      const p=stack.pop(); const x=p%W, y=(p/W)|0;
-      const nb=[[x+1,y],[x-1,y],[x,y+1],[x,y-1]];
-      for(const [nx,ny] of nb){
-        if(nx<0||nx>=W||ny<0||ny>=H) continue;
-        const j=ny*W+nx;
-        if(label[j]<0&&cells[j]&&cells[j].code===code){ label[j]=nc; stack.push(j); }
-      }
-    }
-    compCode[nc++]=code;
-  }
-  const adj=[]; for(let a=0;a<nc;a++) adj.push(new Map());
-  for(let y=0;y<H;y++) for(let x=0;x<W;x++){
-    const i=y*W+x; if(label[i]<0) continue;
-    const add=(A,B)=>{ if(B<0||B===A) return; adj[A].set(B,(adj[A].get(B)||0)+1); adj[B].set(A,(adj[B].get(A)||0)+1); };
-    if(x+1<W) add(label[i],label[i+1]);
-    if(y+1<H) add(label[i],label[i+W]);
-  }
-  const parent=[...Array(nc).keys()];
-  const find=x=>{ while(parent[x]!==x){ parent[x]=parent[parent[x]]; x=parent[x]; } return x; };
-  const compSize=new Array(nc).fill(0);
-  for(let i=0;i<N;i++) if(label[i]>=0) compSize[label[i]]++;
-  const done=new Set();
-  while(true){
-    let small=-1,ss=Infinity;
-    for(let a=0;a<nc;a++){
-      if(find(a)!==a||done.has(a)) continue;
-      if(compSize[a]<minArea&&compSize[a]<ss){ss=compSize[a];small=a;}
-    }
-    if(small<0) break;
-    done.add(small);
-    let target=-1,tb=-1,tsame=-1,tsb=-1;
-    for(const [oRaw,n] of adj[small]){
-      const o=find(oRaw); if(o===small) continue;
-      if(n>tb){tb=n;target=o;}
-      if(compCode[o]===compCode[small]&&n>tsb){tsb=n;tsame=o;}
-    }
-    const pick=tsame>=0?tsame:target;
-    if(pick>=0){
-      for(let a=0;a<nc;a++) if(find(a)===small) parent[a]=pick;
-      parent[small]=pick; compSize[pick]+=compSize[small];
-      for(const [oRaw,n] of adj[small]){ const o=find(oRaw); if(o===pick) continue; adj[pick].set(o,(adj[pick].get(o)||0)+n); }
-    }
-  }
-  const codeMap=new Map(COLORS.map(c=>[c.code,c]));
-  const rootColor={};
-  for(let a=0;a<nc;a++){ const r=find(a); if(!rootColor[r]) rootColor[r]=codeMap.get(compCode[r]); }
-  let regionCount=0;
-  for(let a=0;a<nc;a++) if(find(a)===a && compSize[a]>0) regionCount++;
-  return {label,find,nc,rootColor,regionCount};
-}
-function pbnCodes(R){
-  const order=new Map(COLORS.map((c,i)=>[c.code,i]));
-  const codes=[...new Set(Array.from({length:R.nc},(_,a)=>R.rootColor[R.find(a)].code))].sort((a,b)=>order.get(a)-order.get(b));
-  const numByCode={}; codes.forEach((c,i)=>numByCode[c]=i+1);
-  return {codes,numByCode};
-}
-function drawPbn(canvas, cell){
-  if(!grid) return;
-  const {w:W,h:H,cells}=grid;
-  const R=buildRegions(cells,W,H);
-  const {codes,numByCode}=pbnCodes(R);
-  const rid=new Int32Array(W*H).fill(-1);
-  for(let i=0;i<W*H;i++) if(R.label[i]>=0) rid[i]=R.find(R.label[i]);
-  const margin=Math.round(cell*1.5);
-  const titleH=Math.round(cell*1.5);
-  const chipW=Math.round(cell*4.6), chipH=Math.round(cell*1.15), chipGap=Math.round(cell*0.4);
-  const perRow=Math.max(1,Math.floor((W*cell+2*margin)/(chipW+chipGap)));
-  const legendH=Math.ceil(codes.length/perRow)*(chipH+chipGap)+chipGap*2;
-  const footH=Math.round(cell*1.2);
-  canvas.width=W*cell+2*margin;
-  canvas.height=H*cell+2*margin+titleH+legendH+footH;
-  const ctx=canvas.getContext('2d');
-  ctx.fillStyle="#fff"; ctx.fillRect(0,0,canvas.width,canvas.height);
-  const ox=margin, oy=margin+titleH;
-  ctx.textAlign="left"; ctx.textBaseline="middle";
-  ctx.fillStyle="#222"; ctx.font=`bold ${Math.round(cell*0.8)}px sans-serif`;
-  ctx.fillText(`${W}×${H} · ${codes.length} 色 · ${R.regionCount} 个区域 · MARD色号`, 4, titleH*0.5);
-  /* 区域填色 */
-  for(let y=0;y<H;y++) for(let x=0;x<W;x++){
-    const i=y*W+x; if(rid[i]<0) continue;
-    ctx.fillStyle=R.rootColor[rid[i]].hex;
-    ctx.fillRect(ox+x*cell,oy+y*cell,cell+0.5,cell+0.5);
-  }
-  /* 区域描边 */
-  ctx.strokeStyle="#444"; ctx.lineWidth=Math.max(1.5,cell*0.1); ctx.lineJoin="round"; ctx.lineCap="round";
-  ctx.beginPath();
-  for(let y=0;y<H;y++) for(let x=0;x<W;x++){
-    const i=y*W+x; if(rid[i]<0) continue;
-    const r=rid[i], px=ox+x*cell, py=oy+y*cell;
-    if(x+1>=W||rid[i+1]!==r){ ctx.moveTo(px+cell,py); ctx.lineTo(px+cell,py+cell); }
-    if(y+1>=H||rid[i+W]!==r){ ctx.moveTo(px,py+cell); ctx.lineTo(px+cell,py+cell); }
-    if(x-1<0||rid[i-1]!==r){ ctx.moveTo(px,py); ctx.lineTo(px,py+cell); }
-    if(y-1<0||rid[i-W]!==r){ ctx.moveTo(px,py); ctx.lineTo(px+cell,py); }
-  }
-  ctx.stroke();
-  /* 编号：每个连通块一个号（同色同号），形心落在区域外时取最近格 */
-  const st={};
-  for(let i=0;i<W*H;i++){
-    if(R.label[i]<0) continue;
-    const a=R.label[i], x=i%W, y=(i/W)|0;
-    let s=st[a]; if(!s) s=st[a]={sx:0,sy:0,n:0,minx:1e9,maxx:-1,miny:1e9,maxy:-1};
-    s.sx+=x; s.sy+=y; s.n++;
-    if(x<s.minx)s.minx=x; if(x>s.maxx)s.maxx=x; if(y<s.miny)s.miny=y; if(y>s.maxy)s.maxy=y;
-  }
-  for(const a in st){
-    const s=st[a], r=R.find(+a);
-    const pw=s.maxx-s.minx+1, ph=s.maxy-s.miny+1;
-    if(Math.min(pw,ph)*cell < Math.max(14, cell*1.1)) continue;
-    const cxg=s.sx/s.n+0.5, cyg=s.sy/s.n+0.5;
-    let bx=-1,by=-1,bbd=Infinity;
-    for(let y=s.miny;y<=s.maxy;y++) for(let x=s.minx;x<=s.maxx;x++){
-      const lb=R.label[y*W+x]; if(lb<0||R.find(lb)!==r) continue;
-      const d=(x+0.5-cxg)**2+(y+0.5-cyg)**2;
-      if(d<bbd){bbd=d;bx=x;by=y;}
-    }
-    if(bx<0) continue;
-    const col=R.rootColor[r], num=numByCode[col.code];
-    const px=ox+(bx+0.5)*cell, py=oy+(by+0.5)*cell;
-    const fs=Math.min(Math.round(cell*0.6), Math.max(9, Math.round(Math.min(pw,ph)*cell*0.5)));
-    const lum=0.299*col.r+0.587*col.g+0.114*col.b;
-    ctx.font=`bold ${fs}px sans-serif`; ctx.textAlign="center"; ctx.textBaseline="middle";
-    ctx.lineWidth=Math.max(2,fs*0.28);
-    ctx.strokeStyle=lum>150?"rgba(0,0,0,.35)":"rgba(255,255,255,.85)";
-    ctx.strokeText(num,px,py);
-    ctx.fillStyle=lum>150?"#333":"#fff";
-    ctx.fillText(num,px,py);
-  }
-  /* 图例：色块内写色号，右侧写编号 */
-  let ly=oy+H*cell+margin+chipGap;
-  codes.forEach((code,i)=>{
-    const c=COLORS.find(x=>x.code===code);
-    const row=Math.floor(i/perRow), col=i%perRow;
-    const lx=ox+col*(chipW+chipGap), yy=ly+row*(chipH+chipGap);
-    const boxW=Math.round(chipW*0.52);
-    ctx.fillStyle=c.hex; ctx.fillRect(lx,yy,boxW,chipH);
-    ctx.strokeStyle="#bbb"; ctx.lineWidth=0.5; ctx.strokeRect(lx+0.25,yy+0.25,boxW,chipH);
-    if(cell>=9){
-      ctx.fillStyle=c.text; ctx.font=`${Math.max(4,Math.round(cell*0.42))}px sans-serif`; ctx.textAlign="center";
-      ctx.fillText(c.code, lx+boxW/2, yy+chipH/2+0.5);
-      ctx.fillStyle="#222"; ctx.textAlign="left";
-      ctx.fillText(`${i+1}号`, lx+boxW+4, yy+chipH/2+0.5);
-    }
-  });
-  ctx.fillStyle="#999"; ctx.font=`${Math.max(5,Math.round(cell*0.38))}px sans-serif`; ctx.textAlign="left";
-  const stockActive=document.getElementById('stockOn').checked && parseStock();
-  ctx.fillText(stockActive?`色号范围：商家库存 ${activeColors.length} 色 · 配色以实物色卡为准`:`色号体系 MARD 221（A~M）· 配色以实物色卡为准`, 4, canvas.height-footH/2);
-  document.getElementById('stats').textContent =
-    `数字油画 · ${W}×${H} · ${codes.length} 色 · ${R.regionCount} 个区域 · 双指缩放查看编号`;
-}
-
-/* ===== v1.9 在线填色（电子数字油画）：矢量平滑分区，与拼豆网格无关 ===== */
+/* ===== 数字油画（电子填色）：矢量平滑分区 + 点区填色，与拼豆网格无关 ===== */
 const FINE_RES=[160,180,200,240,280];
 const FINE_K=[14,20,28,40,55];
 const FINE_TARGET=[30,55,95,180,300];
@@ -889,6 +722,7 @@ function pbPath(ctx,loops,s){
 }
 function drawPaint(canvas, widthPx, blank){
   const M=paintModel; if(!M) return false;
+  const preview=!blank && pbPreview();      // 预览成品＝把所有区域都填上
   const s=Math.max(2,Math.floor(widthPx/M.W));
   const margin=Math.round(s*3), titleH=Math.round(s*8);
   const cw=M.W*s;
@@ -905,7 +739,7 @@ function drawPaint(canvas, widthPx, blank){
   ctx.fillStyle="#fff"; ctx.fillRect(0,0,canvas.width,canvas.height);
   ctx.save(); ctx.translate(margin,margin+titleH);
   ctx.beginPath(); ctx.rect(0,0,M.W*s,M.H*s); ctx.clip();       // 所有绘制都框在画面里，溢色不会跑到留白
-  const on=r=>!blank && M.filled.has(r.id);
+  const on=r=>!blank && (preview || M.filled.has(r.id));
   ctx.fillStyle="#e3e4e9"; ctx.fillRect(0,0,M.W*s,M.H*s);        // 先铺底色，区域之间绝不留白缝
   for(const r of M.regions){
     if(!on(r)) continue;
@@ -918,16 +752,18 @@ function drawPaint(canvas, widthPx, blank){
     ctx.strokeStyle=on(r)?`rgb(${r.color[0]},${r.color[1]},${r.color[2]})`:"#e3e4e9";
     ctx.beginPath(); pbPath(ctx,r.loops,s); ctx.stroke();
   }
-  // 分区线：全局只算一次、只画一次，相邻区域共用同一条曲线
-  ctx.strokeStyle="#4a4a52"; ctx.lineWidth=Math.max(1,s*0.16);
-  for(const c of M.borders){
-    ctx.beginPath();
-    if(c.closed) pbPath(ctx,[c.pts],s); else pbPathOpen(ctx,c.pts,s);
-    ctx.stroke();
+  // 分区线：全局只算一次、只画一次，相邻区域共用同一条曲线；成品预览时不画线
+  if(!preview){
+    ctx.strokeStyle="#4a4a52"; ctx.lineWidth=Math.max(1,s*0.16);
+    for(const c of M.borders){
+      ctx.beginPath();
+      if(c.closed) pbPath(ctx,[c.pts],s); else pbPathOpen(ctx,c.pts,s);
+      ctx.stroke();
+    }
   }
   ctx.textAlign="center"; ctx.textBaseline="middle";
   for(const r of M.regions){
-    if(r.radius*s<6) continue;
+    if(preview || r.radius*s<6) continue;   // 成品不叠编号
     const c=on(r)?r.color:[227,228,233];
     const lum=0.299*c[0]+0.587*c[1]+0.114*c[2];
     const t=String(r.num);
@@ -942,7 +778,8 @@ function drawPaint(canvas, widthPx, blank){
   ctx.fillStyle="#222"; ctx.textAlign="left"; ctx.textBaseline="middle";
   ctx.font=`bold ${Math.round(unit*3.4)}px sans-serif`;
   const done=blank?0:M.filled.size;
-  ctx.fillText(`${blank?"数字油画线稿":"数字油画"} · ${M.W}×${M.H} · ${M.colors.length} 色 · ${M.regions.length} 个区域${blank?"":" · 已填 "+done}`, margin, margin+titleH*0.5);
+  const head=blank?"数字油画线稿":(preview?"数字油画成品":"数字油画");
+  ctx.fillText(`${head} · ${M.W}×${M.H} · ${M.colors.length} 色 · ${M.regions.length} 个区域${blank||preview?"":" · 已填 "+done}`, margin, margin+titleH*0.5);
   const ly=margin+titleH+M.H*s+chipGap*2;
   M.colors.forEach((c,i)=>{
     const col=i%perRow, row=(i/perRow)|0;
@@ -956,7 +793,7 @@ function drawPaint(canvas, widthPx, blank){
   });
   ctx.fillStyle="#999"; ctx.textAlign="left";
   ctx.font=`${Math.round(unit*2.6)}px sans-serif`;
-  ctx.fillText(blank?"按编号填色 · 编号对应下方色块":"点区域填色 · 双指缩放填小区域", margin, canvas.height-footH*0.4);
+  ctx.fillText(blank?"按编号填色 · 编号对应下方色块":(preview?"成品预览 · 取消「预览成品」继续填色":"点区域填色 · 双指缩放填小区域"), margin, canvas.height-footH*0.4);
   return true;
 }
 function pbFillAt(clientX,clientY){
@@ -1003,7 +840,8 @@ function syncPaint(){
   document.getElementById('paintProg').textContent=
     `共 ${M.regions.length} 区 · 已填 ${M.filled.size} · 剩 ${M.regions.length-M.filled.size}`;
   document.getElementById('stats').textContent=
-    `在线填色 · ${M.W}×${M.H} · ${M.colors.length} 色 · ${M.regions.length} 个区域 · 双指缩放填小区域`;
+    `数字油画 · ${M.W}×${M.H} · ${M.colors.length} 色 · ${M.regions.length} 个区域 · `+
+    (pbPreview()?'成品预览（无线稿、无编号）':`已填 ${M.filled.size}，双指缩放填小区域`);
 }
 
 /* ===== 图纸渲染 ===== */
@@ -1012,14 +850,11 @@ function currentCounts(){
   for(const c of grid.cells){ if(c){ counts.set(c.code,(counts.get(c.code)||0)+1); total++; } }
   return {counts,total,legend:COLORS.filter(c=>counts.has(c.code))};
 }
-function drawMain(canvas, cell){
-  (document.getElementById('pbnOn').checked?drawPbn:drawChart)(canvas, cell);
-}
 function render(){
   if(isPaint()&&paintModel){ syncPaint(); return drawPaint(document.getElementById('chart'),PB_RENDER_W,false); }
   // 高分辨率 backing：放大看色号不糊。格子上限 64px，总像素封顶 ~16M 防内存爆
   const cell=Math.max(20,Math.min(64,Math.floor(Math.sqrt(16e6/((grid.w+3)*(grid.h+3))))));
-  drawMain(document.getElementById('chart'), cell);
+  drawChart(document.getElementById('chart'), cell);
   syncPaint();
 }
 
@@ -1102,17 +937,20 @@ function drawChart(canvas, cell){
 }
 
 /* ===== 导出 / 分享 / 清单 / 更新 ===== */
-function isPbn(){ return document.getElementById('pbnOn').checked; }
+function pbPreview(){ const e=document.getElementById('pbPreview'); return !!(e&&e.checked); }
 function exportDataURL(){
   const cv=document.createElement('canvas');
-  if(isPaint()&&paintModel) drawPaint(cv,PB_EXPORT_W,false); else drawMain(cv,40);
+  if(isPaint()&&paintModel) drawPaint(cv,PB_EXPORT_W,false); else drawChart(cv,40);
   const url=cv.toDataURL('image/png');
   render();
   return url;
 }
 function fileName(){
-  if(isPaint()&&paintModel) return `数字油画-${paintModel.W}x${paintModel.H}-${paintModel.filled.size}区.png`;
-  return `${isPbn()?"数字油画":"拼豆图纸"}-MARD-${grid.w}x${grid.h}.png`;
+  if(isPaint()&&paintModel){
+    const M=paintModel;
+    return pbPreview()?`数字油画-成品-${M.W}x${M.H}.png`:`数字油画-${M.W}x${M.H}-${M.filled.size}区.png`;
+  }
+  return `拼豆图纸-MARD-${grid.w}x${grid.h}.png`;
 }
 
 function savePNG(){
@@ -1136,16 +974,8 @@ function copyList(){
     const M=paintModel, blobs=new Array(M.colors.length).fill(0);
     for(const r of M.regions) blobs[r.num-1]++;
     const hex=c=>"#"+c.map(v=>v.toString(16).padStart(2,"0")).join("");
-    const lines=[`数字油画色号表`,`图 ${M.W}×${M.H} · ${M.colors.length} 色 · ${M.regions.length} 个区域`,""];
-    M.colors.forEach((c,i)=>lines.push(`${i+1}号 ${hex(c)} · ${blobs[i]} 区${M.filled.size?" · 已填":""}`));
-    text=lines.join("\n");
-  } else if(isPbn()){
-    const R=buildRegions(grid.cells,grid.w,grid.h);
-    const {codes,numByCode}=pbnCodes(R);
-    const blobs={};
-    for(let a=0;a<R.nc;a++){ const col=R.rootColor[R.find(a)]; blobs[col.code]=(blobs[col.code]||0)+1; }
-    const lines=[`数字油画备色清单 · MARD色号`,`图 ${grid.w}×${grid.h} · ${codes.length} 色 · ${R.regionCount} 个区域`,""];
-    for(const code of codes) lines.push(`${numByCode[code]}号 ${code} · ${blobs[code]} 区`);
+    const lines=[`数字油画色号表`,`图 ${M.W}×${M.H} · ${M.colors.length} 色 · ${M.regions.length} 个区域${pbPreview()?" · 成品":""}`,""];
+    M.colors.forEach((c,i)=>lines.push(`${i+1}号 ${hex(c)} · ${blobs[i]} 区`));
     text=lines.join("\n");
   } else {
     const {counts,total,legend}=currentCounts();
@@ -1168,25 +998,20 @@ document.getElementById('width').addEventListener('input',e=>{document.getElemen
 document.getElementById('width').addEventListener('change',regenerate);
 document.getElementById('dither').addEventListener('change',regenerate);
 document.getElementById('merge').addEventListener('change',regenerate);
-document.getElementById('pbnOn').addEventListener('change',e=>{
-  if(e.target.checked) document.getElementById('paintOn').checked=false;
-  regenerate();
-});
-/* 在线填色（电子数字油画）：与格子版互斥，勾选后才建模型 */
-document.getElementById('paintOn').addEventListener('change',e=>{
-  if(e.target.checked) document.getElementById('pbnOn').checked=false;
-  regenerate();
-});
+/* 数字油画：勾选后才建模型；取消勾选回到拼豆图纸 */
+document.getElementById('paintOn').addEventListener('change',()=>regenerate());
+/* 预览成品：直接看填完的样子，不重新算模型 */
+document.getElementById('pbPreview').addEventListener('change',render);
 document.getElementById('fine').addEventListener('input',e=>{document.getElementById('fineVal').textContent=FINE_NAME[fineLevel()-1];});
 document.getElementById('fine').addEventListener('change',regenerate);
-/* 点一下=填色；拖动和双指缩放不当作填色 */
+/* 点一下=填色；拖动和双指缩放不当作填色；预览成品时点击不填色 */
 let pbDown=null;
 document.getElementById('chart').addEventListener('pointerdown',e=>{
   pbDown={x:e.clientX,y:e.clientY,t:Date.now()};
 });
 document.getElementById('chart').addEventListener('pointerup',e=>{
   const d=pbDown; pbDown=null;
-  if(!d||!isPaint()||!paintModel) return;
+  if(!d||!isPaint()||!paintModel||pbPreview()) return;
   const moved=Math.hypot(e.clientX-d.x,e.clientY-d.y)*(window.devicePixelRatio||1);
   if(moved>14||Date.now()-d.t>600) return;
   pbFillAt(e.clientX,e.clientY);
