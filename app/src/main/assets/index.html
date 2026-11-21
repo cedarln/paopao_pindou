@@ -44,6 +44,7 @@
   <button onclick="sharePNG()">分享</button>
   <button onclick="copyList()">备料清单</button>
   <label><input type="checkbox" id="pbnOn"> 数字油画</label>
+  <label><input type="checkbox" id="paintOn"> 在线填色</label>
 </div>
 <div class="bar">
   <label>宽度 <input type="range" id="width" min="16" max="120" value="50"><span class="num" id="widthVal">50</span>格</label>
@@ -62,10 +63,18 @@
   <input type="text" id="stockCodes" class="stock" placeholder="商家库存色号，如 A1 A5 F2 H7">
   <span id="stockInfo"></span>
 </div>
+<div class="bar" id="paintBar" style="display:none">
+  <label>精细度 <input type="range" id="fine" min="1" max="5" value="3"><span class="num" id="fineVal">标准</span></label>
+  <button class="mini" onclick="paintUndo()">撤销</button>
+  <button class="mini" onclick="paintReset()">重置</button>
+  <button class="mini" onclick="saveLineArt()">导出空白线稿</button>
+  <span id="paintProg"></span>
+</div>
 <div id="stats"></div>
 <div class="tip">发代拼商家：用「保存图纸」的高清 PNG，微信选「原图」或以文件发送；普通图片会被压缩糊掉色号。</div>
 <div class="tip">商家说没有某个颜色？勾「只用我有豆」把商家色号粘进去；或点 72/96/144/221 预设、拖「限色」滑杆控制颜色数（221=不限）。</div>
 <div class="tip">数字油画模式：按颜色分区、每区标编号，图例给「编号→MARD色号」；色数默认 24，可用「限色」调节。</div>
+<div class="tip" id="paintTip" style="display:none">在线填色：点一下区域就填上画面本身的颜色，双指放大能填很小的区域；「精细度」越高区域越多越小。这个模式跟拼豆图纸无关，出来的图不含色号。</div>
 <div id="stage"><canvas id="chart" class="fit"></canvas></div>
 
 <script>
@@ -235,6 +244,7 @@ function regenerate(){
     if(max<221) reduceToMaxColors(cells,max);
   }
   grid={w:W,h:H,cells};
+  paintModel=isPaint()?buildPaint():null;
   render();
   syncPreset();
 }
@@ -465,6 +475,537 @@ function drawPbn(canvas, cell){
     `数字油画 · ${W}×${H} · ${codes.length} 色 · ${R.regionCount} 个区域 · 双指缩放查看编号`;
 }
 
+/* ===== v1.9 在线填色（电子数字油画）：矢量平滑分区，与拼豆网格无关 ===== */
+const FINE_RES=[160,180,200,240,280];
+const FINE_K=[14,20,28,40,55];
+const FINE_TARGET=[30,55,95,180,300];
+const FINE_MINFRAC=[0.010,0.006,0.0035,0.0016,0.0008];
+const FINE_NAME=['粗略','较简','标准','细致','极细'];
+const FINE_THIN=[1.2,1.1,1.0,0.9,0.8];   // 面积/周长低于此值的细长条并进邻居
+const PB_RENDER_W=2400, PB_EXPORT_W=2800;
+let paintModel=null, paintGeom={s:1,margin:0,titleH:0};
+function fineLevel(){ return Math.min(5,Math.max(1,parseInt(document.getElementById('fine').value)||3)); }
+function isPaint(){ return document.getElementById('paintOn').checked; }
+
+function pbgBoxBlur(src,W,H){
+  const tmp=new Float32Array(src.length), out=new Float32Array(src.length);
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++)for(let k=0;k<3;k++){
+    let s=0,c=0;
+    for(let dx=-1;dx<=1;dx++){ const nx=x+dx; if(nx<0||nx>=W) continue; s+=src[(y*W+nx)*3+k]; c++; }
+    tmp[(y*W+x)*3+k]=s/c;
+  }
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++)for(let k=0;k<3;k++){
+    let s=0,c=0;
+    for(let dy=-1;dy<=1;dy++){ const ny=y+dy; if(ny<0||ny>=H) continue; s+=tmp[(ny*W+x)*3+k]; c++; }
+    out[(y*W+x)*3+k]=s/c;
+  }
+  return out;
+}
+// 3x3 取众数，压掉孤立碎块；透明像素不参与
+function pbgMajority(a,ok,W,H,passes){
+  for(let p=0;p<passes;p++){
+    const cur=a.slice(), next=a.slice();
+    for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+      const i=y*W+x;
+      if(!ok[i]) continue;
+      const tally=new Map();
+      for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++){
+        const nx=x+dx, ny=y+dy;
+        if(nx<0||ny<0||nx>=W||ny>=H||!ok[ny*W+nx]) continue;
+        const v=cur[ny*W+nx]; tally.set(v,(tally.get(v)||0)+1);
+      }
+      const self=cur[i]; let best=self, bc=tally.get(self)||0;
+      for(const [v,c] of tally) if(c>bc){ bc=c; best=v; }
+      next[i]=bc>=4?best:self;
+    }
+    a.set(next);
+  }
+}
+// Marching Squares：二值掩膜取轮廓，外圈补 0 保证贴边也能闭合成环
+function pbContours(inner,W,H){
+  const mask=new Uint8Array((W+2)*(H+2));
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++) mask[(y+1)*(W+2)+(x+1)]=inner[y*W+x];
+  const w=W+2, h=H+2, segs=[];
+  const at=(x,y)=>mask[y*w+x];
+  for(let y=0;y<h-1;y++)for(let x=0;x<w-1;x++){
+    const tl=at(x,y), tr=at(x+1,y), br=at(x+1,y+1), bl=at(x,y+1);
+    const idx=(tl<<3)|(tr<<2)|(br<<1)|bl;
+    if(idx===0||idx===15) continue;
+    const T=[x-0.5,y-1], R=[x,y+0.5-1], B=[x-0.5,y], L=[x-1,y+0.5-1];
+    let out=null;
+    switch(idx){
+      case 1: out=[[L,B]]; break;
+      case 2: out=[[B,R]]; break;
+      case 3: out=[[L,R]]; break;
+      case 4: out=[[T,R]]; break;
+      case 6: out=[[T,B]]; break;
+      case 7: out=[[L,T]]; break;
+      case 8: out=[[L,T]]; break;
+      case 9: out=[[T,B]]; break;
+      case 12: out=[[L,R]]; break;
+      case 13: out=[[B,R]]; break;
+      case 14: out=[[L,B]]; break;
+      case 11: out=[[T,R]]; break;
+      case 5: out=((tl+tr+br+bl)>=2)?[[L,T],[B,R]]:[[T,R],[L,B]]; break;
+      case 10: out=((tl+tr+br+bl)>=2)?[[T,R],[L,B]]:[[L,T],[B,R]]; break;
+    }
+    for(const s of out) segs.push(s);
+  }
+  const key=p=>((p[0]*2)|0)*100000+((p[1]*2)|0);
+  const map=new Map();
+  segs.forEach((s,i)=>{ for(const p of s){ const k=key(p); if(!map.has(k)) map.set(k,[]); map.get(k).push(i); } });
+  const used=new Uint8Array(segs.length), loops=[];
+  for(let i=0;i<segs.length;i++){
+    if(used[i]) continue;
+    const loop=[segs[i][0].slice(),segs[i][1].slice()]; used[i]=1;
+    let guard=0;
+    while(guard++<400000){
+      const last=loop[loop.length-1];
+      const cand=map.get(key(last))||[];
+      let nxt=-1; for(const j of cand) if(!used[j]){ nxt=j; break; }
+      if(nxt<0) break;
+      used[nxt]=1;
+      const s=segs[nxt];
+      loop.push(s[0][0]===last[0]&&s[0][1]===last[1]?s[1]:s[0]);
+      if(loop[loop.length-1][0]===loop[0][0]&&loop[loop.length-1][1]===loop[0][1]) break;
+    }
+    if(loop.length>4) loops.push(loop);
+  }
+  return loops;
+}
+// 统一绕向 + 起点规范化：相邻区域共用边界才会生成同一条曲线，不重影
+function pbCanon(pts){
+  let a=0;
+  for(let i=0;i<pts.length;i++){ const p=pts[i], q=pts[(i+1)%pts.length]; a+=p[0]*q[1]-q[0]*p[1]; }
+  if(a<0) pts=pts.slice().reverse();
+  let bi=0;
+  for(let i=1;i<pts.length;i++) if(pts[i][0]<pts[bi][0]||(pts[i][0]===pts[bi][0]&&pts[i][1]<pts[bi][1])) bi=i;
+  return pts.slice(bi).concat(pts.slice(0,bi));
+}
+function pbDp(pts,eps){
+  if(pts.length<3) return pts;
+  const keep=new Uint8Array(pts.length); keep[0]=keep[pts.length-1]=1;
+  const st=[[0,pts.length-1]];
+  while(st.length){
+    const [a,b]=st.pop(); if(b<=a+1) continue;
+    const pa=pts[a], pb=pts[b];
+    const dx=pb[0]-pa[0], dy=pb[1]-pa[1], len=Math.hypot(dx,dy)||1e-6;
+    let bi=-1, bd=-1;
+    for(let i=a+1;i<b;i++){
+      const d=Math.abs((pts[i][0]-pa[0])*dy-(pts[i][1]-pa[1])*dx)/len;
+      if(d>bd){ bd=d; bi=i; }
+    }
+    if(bd>eps&&bi>0){ keep[bi]=1; st.push([a,bi],[bi,b]); }
+  }
+  const out=[]; for(let i=0;i<pts.length;i++) if(keep[i]) out.push(pts[i]);
+  return out;
+}
+function pbChaikin(pts){
+  const out=[];
+  for(let i=0;i<pts.length;i++){
+    const p=pts[i], q=pts[(i+1)%pts.length];
+    out.push([p[0]*0.75+q[0]*0.25,p[1]*0.75+q[1]*0.25]);
+    out.push([p[0]*0.25+q[0]*0.75,p[1]*0.25+q[1]*0.75]);
+  }
+  return out;
+}
+function pbSimplify(loops,eps){
+  const res=[];
+  for(const lp of loops){
+    const closed=lp[0][0]===lp[lp.length-1][0]&&lp[0][1]===lp[lp.length-1][1];
+    let pts=pbCanon(closed?lp.slice(0,-1):lp.slice());
+    if(pts.length<6) continue;
+    let bd=-1,i0=0;
+    for(let i=1;i<pts.length;i++){ const dx=pts[i][0]-pts[0][0], dy=pts[i][1]-pts[0][1], d=dx*dx+dy*dy; if(d>bd){ bd=d; i0=i; } }
+    const A=pts.slice(0,i0+1), Bp=pts.slice(i0).concat([pts[0]]);
+    let s=pbDp(A,eps).concat(pbDp(Bp,eps).slice(1,-1));
+    if(s.length<4) continue;
+    res.push(pbChaikin(pbChaikin(s)));
+  }
+  return res;
+}
+// 全局边界：所有分区线只算一次、只画一次，相邻区域共用同一条曲线（不会重影/留缝）
+function pbBorderChains(M){
+  const W=M.W,H=M.H,rid=M.rid;
+  const lab=(x,y)=>(x<0||y<0||x>=W||y>=H)?-999:rid[y*W+x];
+  const vi=(x,y)=>y*(W+1)+x;
+  const segs=[];
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+    const l=lab(x,y);
+    if(lab(x+1,y)!==l) segs.push([vi(x+1,y),vi(x+1,y+1)]);
+    if(lab(x,y+1)!==l) segs.push([vi(x,y+1),vi(x+1,y+1)]);
+    if(x===0) segs.push([vi(0,y),vi(0,y+1)]);
+    if(y===0) segs.push([vi(x,0),vi(x+1,0)]);
+  }
+  const adj=new Map();
+  segs.forEach((s,i)=>{ for(const v of s){ if(!adj.has(v)) adj.set(v,[]); adj.get(v).push(i); } });
+  const VX=v=>v%(W+1), VY=v=>((v/(W+1))|0);
+  const other=(s,v)=>s[0]===v?s[1]:s[0];
+  const used=new Uint8Array(segs.length), chains=[];
+  const step=(chain,front,prev,cur)=>{
+    const c=adj.get(cur)||[]; let j=-1;
+    const free=[]; for(const k of c) if(!used[k]) free.push(k);
+    if(!free.length) return -1;
+    if(front){ if(free.length>1) return -1; j=free[0]; }
+    else {
+      if(free.length===1) j=free[0];
+      else {
+        const ax=VX(cur)-VX(prev), ay=VY(cur)-VY(prev); let bs=-2;
+        for(const k of free){ const o=other(segs[k],cur); const bx=VX(o)-VX(cur), by=VY(o)-VY(cur);
+          const sc=(ax*bx+ay*by)/((Math.hypot(ax,ay)*Math.hypot(bx,by))||1); if(sc>bs){ bs=sc; j=k; } }
+        if(bs<0.5) j=-1;
+      }
+    }
+    if(j<0) return -1;
+    used[j]=1;
+    const o=other(segs[j],cur);
+    if(front) chain.unshift(o); else chain.push(o);
+    return o;
+  };
+  for(let i=0;i<segs.length;i++){
+    if(used[i]) continue;
+    used[i]=1;
+    const chain=[segs[i][0],segs[i][1]];
+    let guard=0;
+    while(guard++<400000){ const v=chain[chain.length-1]; if(v===chain[0]) break; if(step(chain,false,chain[chain.length-2],v)<0) break; }
+    while(guard++<800000){ const v=chain[0]; if(v===chain[chain.length-1]) break; if(step(chain,true,chain[1],v)<0) break; }
+    const closed=chain[0]===chain[chain.length-1];
+    let pts=chain.map(v=>[VX(v),VY(v)]);
+    if(closed) pts.pop();
+    if(pts.length<2) continue;
+    // 不做 DP、不压共线点：保留每一级阶梯点，Chaikin 对直线段是精确保持的，只把拐角磨圆
+    if(closed) pts=pbChaikin(pbChaikin(pts));
+    else {
+      for(let rr=0;rr<2;rr++){
+        const o=[pts[0]];
+        for(let k=1;k<pts.length-1;k++){ const a=pts[k-1],b=pts[k],c=pts[k+1];
+          o.push([(a[0]+b[0]*2+c[0])/4,(a[1]+b[1]*2+c[1])/4]); }
+        o.push(pts[pts.length-1]); pts=o;
+      }
+    }
+    chains.push({pts,closed});
+  }
+  return chains;
+}
+function pbPathOpen(ctx,pts,s){
+  const n=pts.length;
+  ctx.moveTo(pts[0][0]*s,pts[0][1]*s);
+  if(n===2){ ctx.lineTo(pts[1][0]*s,pts[1][1]*s); return; }
+  for(let i=1;i<n-1;i++){ const p=pts[i],q=pts[i+1];
+    ctx.quadraticCurveTo(p[0]*s,p[1]*s,((p[0]+q[0])/2)*s,((p[1]+q[1])/2)*s); }
+  const last=pts[n-1]; ctx.lineTo(last[0]*s,last[1]*s);
+}
+// 区域内离边界最远的点：编号放这里最稳（月牙形区域的质心会掉到外面）
+function pbDistField(mask,W,H,cells){
+  const d=new Int32Array(W*H).fill(-1), q=[];
+  const at=(x,y)=>(x>=0&&y>=0&&x<W&&y<H)?mask[y*W+x]:0;
+  for(const p of cells){
+    const x=p%W, y=(p/W)|0;
+    if(!at(x-1,y)||!at(x+1,y)||!at(x,y-1)||!at(x,y+1)){ d[p]=0; q.push(p); }
+  }
+  let head=0;
+  while(head<q.length){
+    const p=q[head++], x=p%W, y=(p/W)|0, v=d[p]+1;
+    for(const [nx,ny] of [[x+1,y],[x-1,y],[x,y+1],[x,y-1]]){
+      if(nx<0||ny<0||nx>=W||ny>=H) continue;
+      const nq=ny*W+nx;
+      if(mask[nq]&&d[nq]<0){ d[nq]=v; q.push(nq); }
+    }
+  }
+  return d;
+}
+function buildPaint(){
+  if(!srcImage) return null;
+  const f=fineLevel();
+  const W=FINE_RES[f-1];
+  const H=Math.max(1,Math.round(W*srcImage.height/srcImage.width));
+  const cv=document.createElement('canvas'); cv.width=W; cv.height=H;
+  const cx=cv.getContext('2d',{willReadFrequently:true});
+  cx.imageSmoothingEnabled=true; cx.imageSmoothingQuality='high';
+  cx.drawImage(srcImage,0,0,W,H);
+  const data=cx.getImageData(0,0,W,H).data;
+  const n=W*H;
+  const ok=new Uint8Array(n);
+  let rgb=new Float32Array(n*3);
+  for(let i=0;i<n;i++){
+    ok[i]=data[i*4+3]>=128?1:0;
+    rgb[i*3]=data[i*4]; rgb[i*3+1]=data[i*4+1]; rgb[i*3+2]=data[i*4+2];
+  }
+  for(let p=0;p<2;p++) rgb=pbgBoxBlur(rgb,W,H);
+  const lab=new Float32Array(n*3);
+  for(let i=0;i<n;i++){ const L=rgb2lab(rgb[i*3],rgb[i*3+1],rgb[i*3+2]); lab[i*3]=L[0]; lab[i*3+1]=L[1]; lab[i*3+2]=L[2]; }
+  // k-means++ 初始化 + Lloyd 迭代
+  const cents=[]; let rnd=12345;
+  const rand=()=>((rnd=(rnd*1103515245+12345)&0x7fffffff)/0x7fffffff);
+  let first=0; while(first<n&&!ok[first]) first++;
+  if(first>=n) return null;
+  cents.push([lab[first*3],lab[first*3+1],lab[first*3+2]]);
+  const d2=new Float32Array(n).fill(Infinity);
+  while(cents.length<FINE_K[f-1]){
+    let best=-1, bi=-1; const a=cents[cents.length-1];
+    for(let i=0;i<n;i++){
+      if(!ok[i]) continue;
+      const dx=lab[i*3]-a[0], dy=lab[i*3+1]-a[1], dz=lab[i*3+2]-a[2], d=dx*dx+dy*dy+dz*dz;
+      if(d<d2[i]) d2[i]=d;
+      if(d2[i]>best){ best=d2[i]; bi=i; }
+    }
+    if(bi<0) break;
+    cents.push([lab[bi*3],lab[bi*3+1],lab[bi*3+2]]);
+  }
+  const KK=cents.length, assign=new Int32Array(n).fill(-1);
+  for(let it=0;it<8;it++){
+    for(let i=0;i<n;i++){
+      if(!ok[i]) continue;
+      let b=0, bd=Infinity;
+      const l0=lab[i*3], l1=lab[i*3+1], l2=lab[i*3+2];
+      for(let k=0;k<KK;k++){
+        const a=cents[k], dx=l0-a[0], dy=l1-a[1], dz=l2-a[2], d=dx*dx+dy*dy+dz*dz;
+        if(d<bd){ bd=d; b=k; }
+      }
+      assign[i]=b;
+    }
+    if(it===7) break;
+    const sum=new Float64Array(KK*3), cnt=new Int32Array(KK);
+    for(let i=0;i<n;i++){ const a=assign[i]; if(a<0) continue; sum[a*3]+=lab[i*3]; sum[a*3+1]+=lab[i*3+1]; sum[a*3+2]+=lab[i*3+2]; cnt[a]++; }
+    for(let k=0;k<KK;k++) if(cnt[k]){ cents[k][0]=sum[k*3]/cnt[k]; cents[k][1]=sum[k*3+1]/cnt[k]; cents[k][2]=sum[k*3+2]/cnt[k]; }
+  }
+  pbgMajority(assign,ok,W,H,2);
+  const pal=new Array(KK).fill(null);
+  {
+    const acc=new Float64Array(KK*3), ac=new Int32Array(KK);
+    for(let i=0;i<n;i++){ const a=assign[i]; if(a<0) continue; acc[a*3]+=rgb[i*3]; acc[a*3+1]+=rgb[i*3+1]; acc[a*3+2]+=rgb[i*3+2]; ac[a]++; }
+    for(let k=0;k<KK;k++) if(ac[k]) pal[k]=[Math.round(acc[k*3]/ac[k]),Math.round(acc[k*3+1]/ac[k]),Math.round(acc[k*3+2]/ac[k])];
+  }
+  // 连通域
+  const comp=new Int32Array(n).fill(-1), firstIdx=[], stack=[];
+  let nc=0;
+  for(let i=0;i<n;i++){
+    if(comp[i]>=0||!ok[i]) continue;
+    const col=assign[i]; comp[i]=nc; firstIdx[nc]=i; stack.length=0; stack.push(i);
+    while(stack.length){
+      const p=stack.pop(), x=p%W, y=(p/W)|0;
+      for(const [nx,ny] of [[x+1,y],[x-1,y],[x,y+1],[x,y-1]]){
+        if(nx<0||ny<0||nx>=W||ny>=H) continue;
+        const q=ny*W+nx;
+        if(comp[q]<0&&ok[q]&&assign[q]===col){ comp[q]=nc; stack.push(q); }
+      }
+    }
+    nc++;
+  }
+  if(!nc) return null;
+  const adj=[]; for(let a=0;a<nc;a++) adj.push(new Map());
+  const blen=new Float64Array(nc);   // 每个分区的边界长度，用来识别“细长条”
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+    const p=y*W+x, a=comp[p]; if(a<0) continue;
+    if((x+1<W?comp[p+1]:-1)!==a) blen[a]++;
+    if((x>0?comp[p-1]:-1)!==a) blen[a]++;
+    if((y+1<H?comp[p+W]:-1)!==a) blen[a]++;
+    if((y>0?comp[p-W]:-1)!==a) blen[a]++;
+    if(x+1<W){ const b=comp[p+1]; if(b>=0&&a!==b){ adj[a].set(b,(adj[a].get(b)||0)+1); adj[b].set(a,(adj[b].get(a)||0)+1); } }
+    if(y+1<H){ const b=comp[p+W]; if(b>=0&&a!==b){ adj[a].set(b,(adj[a].get(b)||0)+1); adj[b].set(a,(adj[b].get(a)||0)+1); } }
+  }
+  const size=new Float64Array(nc), color=new Int32Array(nc);
+  for(let i=0;i<n;i++) if(comp[i]>=0) size[comp[i]]++;
+  for(let a=0;a<nc;a++) color[a]=assign[firstIdx[a]];
+  const parent=new Int32Array(nc); for(let a=0;a<nc;a++) parent[a]=a;
+  const find=a=>{ while(parent[a]!==a){ parent[a]=parent[parent[a]]; a=parent[a]; } return a; };
+  const active=[]; for(let a=0;a<nc;a++) active.push(a);
+  const dead=new Uint8Array(nc);
+  function bestNeighbor(a){
+    let best=-1, bestB=-1; const col=color[a];
+    for(const [b,w] of adj[a]){
+      const rb=find(b); if(rb===a) continue;
+      const score=(color[rb]===col?1e9:0)+w;   // 优先并给同色、公共边界最长的邻居
+      if(score>best){ best=score; bestB=rb; }
+    }
+    return bestB;
+  }
+  function mergeAway(a){
+    const b=bestNeighbor(a);
+    const i=active.indexOf(a); if(i>=0){ active[i]=active[active.length-1]; active.pop(); }
+    if(b<0){ dead[a]=1; return; }
+    parent[a]=b; size[b]+=size[a]; blen[b]+=blen[a]-2*(adj[a].get(b)||0);
+    for(const [x,w] of adj[a]){ if(x===b) continue; adj[b].set(x,(adj[b].get(x)||0)+w); adj[x].set(b,(adj[x].get(b)||0)+w); }
+  }
+  function smallestUnder(lim){
+    let pickA=-1, pickS=Infinity;
+    for(const a of active){ if(dead[a]) continue; if(lim!==null&&size[a]>=lim) continue; if(size[a]<pickS){ pickS=size[a]; pickA=a; } }
+    return pickA;
+  }
+  const minArea=Math.max(40,Math.round(n*FINE_MINFRAC[f-1]));
+  for(let guard=0;guard<nc+5;guard++){ const a=smallestUnder(minArea); if(a<0) break; mergeAway(a); }
+  while(active.length>FINE_TARGET[f-1]){ const a=smallestUnder(null); if(a<0) break; mergeAway(a); }
+  // 渐变带会切出一层层细长条，线上就是梳齿；面积/周长太小的并进邻居
+  const THIN=FINE_THIN[f-1];
+  for(let guard=0;guard<nc+5;guard++){
+    if(active.length<=8) break;
+    let pickA=-1, pickR=Infinity;
+    for(const a of active){ if(dead[a]) continue; const r=size[a]/Math.max(1,blen[a]); if(r<THIN&&r<pickR){ pickR=r; pickA=a; } }
+    if(pickA<0) break;
+    mergeAway(pickA);
+  }
+  // 重标号 + 取色
+  const roots=new Map(), rid=new Int32Array(n).fill(-1), rcolor=[];
+  let nr=0;
+  for(let i=0;i<n;i++){
+    const c=comp[i]; if(c<0) continue;
+    const r=find(c); let k=roots.get(r);
+    if(k===undefined){ k=nr++; roots.set(r,k); rcolor[k]=pal[color[r]]||[200,200,200]; }
+    rid[i]=k;
+  }
+  const regions=[]; for(let a=0;a<nr;a++) regions.push({id:a,color:rcolor[a],cells:[],area:0});
+  for(let i=0;i<n;i++) if(rid[i]>=0){ const r=regions[rid[i]]; r.cells.push(i); r.area++; }
+  // 编号按颜色给（同色同号，和线下数字油画一致）
+  const colors=[]; const numByColor=new Map();
+  for(const r of regions){
+    const key=r.color.join(',');
+    if(!numByColor.has(key)){ numByColor.set(key,colors.length+1); colors.push(r.color); }
+    r.num=numByColor.get(key);
+  }
+  const eps=1.6;
+  for(const r of regions){
+    const mask=new Uint8Array(n); for(const p of r.cells) mask[p]=1;
+    r.loops=pbSimplify(pbContours(mask,W,H),eps);
+    const d=pbDistField(mask,W,H,r.cells);
+    let bi=r.cells[0], bv=-1;
+    for(const p of r.cells) if(d[p]>bv){ bv=d[p]; bi=p; }
+    r.labelX=(bi%W)+0.5; r.labelY=((bi/W)|0)+0.5; r.radius=bv;
+  }
+  const model={W,H,n,rid,regions,colors,filled:new Set(),order:[]};
+  model.borders=pbBorderChains(model);
+  return model;
+}
+function pbPath(ctx,loops,s){
+  s=s||1;
+  for(const lp of loops){
+    const n=lp.length;
+    ctx.moveTo(((lp[0][0]+lp[n-1][0])/2)*s,((lp[0][1]+lp[n-1][1])/2)*s);
+    for(let i=0;i<n;i++){
+      const p=lp[i], q=lp[(i+1)%n];
+      ctx.quadraticCurveTo(q[0]*s,q[1]*s,((p[0]+q[0])/2)*s,((p[1]+q[1])/2)*s);
+    }
+    ctx.closePath();
+  }
+}
+function drawPaint(canvas, widthPx, blank){
+  const M=paintModel; if(!M) return false;
+  const s=Math.max(2,Math.floor(widthPx/M.W));
+  const margin=Math.round(s*3), titleH=Math.round(s*8);
+  const cw=M.W*s;
+  const unit=cw/100;                       // 标题/图例按画幅宽度定字号，缩放到手机宽度也读得清
+  const chipW=Math.round(unit*12), chipH=Math.round(unit*3.6), chipGap=Math.round(unit*1.2);
+  const perRow=Math.max(1,Math.floor(cw/(chipW+chipGap)));
+  const legendRows=Math.ceil(M.colors.length/perRow);
+  const legendH=legendRows*(chipH+chipGap)+chipGap;
+  const footH=Math.round(unit*4);
+  canvas.width=M.W*s+margin*2;
+  canvas.height=M.H*s+margin*2+titleH+legendH+footH;
+  paintGeom={s,margin,titleH};
+  const ctx=canvas.getContext('2d');
+  ctx.fillStyle="#fff"; ctx.fillRect(0,0,canvas.width,canvas.height);
+  ctx.save(); ctx.translate(margin,margin+titleH);
+  ctx.beginPath(); ctx.rect(0,0,M.W*s,M.H*s); ctx.clip();       // 所有绘制都框在画面里，溢色不会跑到留白
+  const on=r=>!blank && M.filled.has(r.id);
+  ctx.fillStyle="#e3e4e9"; ctx.fillRect(0,0,M.W*s,M.H*s);        // 先铺底色，区域之间绝不留白缝
+  for(const r of M.regions){
+    if(!on(r)) continue;
+    ctx.fillStyle=`rgb(${r.color[0]},${r.color[1]},${r.color[2]})`;
+    ctx.beginPath(); pbPath(ctx,r.loops,s); ctx.fill('evenodd');
+  }
+  // 用各自的颜色描一遍边，把区域之间的细小缝隙盖掉
+  ctx.lineJoin="round"; ctx.lineCap="round"; ctx.lineWidth=Math.max(1,s*0.8);
+  for(const r of M.regions){
+    ctx.strokeStyle=on(r)?`rgb(${r.color[0]},${r.color[1]},${r.color[2]})`:"#e3e4e9";
+    ctx.beginPath(); pbPath(ctx,r.loops,s); ctx.stroke();
+  }
+  // 分区线：全局只算一次、只画一次，相邻区域共用同一条曲线
+  ctx.strokeStyle="#4a4a52"; ctx.lineWidth=Math.max(1,s*0.16);
+  for(const c of M.borders){
+    ctx.beginPath();
+    if(c.closed) pbPath(ctx,[c.pts],s); else pbPathOpen(ctx,c.pts,s);
+    ctx.stroke();
+  }
+  ctx.textAlign="center"; ctx.textBaseline="middle";
+  for(const r of M.regions){
+    if(r.radius*s<6) continue;
+    const c=on(r)?r.color:[227,228,233];
+    const lum=0.299*c[0]+0.587*c[1]+0.114*c[2];
+    const t=String(r.num);
+    ctx.font=`600 ${Math.max(4,Math.min(r.radius*s*0.8,s*6)).toFixed(1)}px sans-serif`;
+    ctx.lineWidth=Math.max(1,s*0.24);
+    ctx.strokeStyle=lum>140?"rgba(0,0,0,.35)":"rgba(255,255,255,.85)";
+    ctx.strokeText(t,r.labelX*s,r.labelY*s);
+    ctx.fillStyle=lum>140?"#22252b":"#ffffff";
+    ctx.fillText(t,r.labelX*s,r.labelY*s);
+  }
+  ctx.restore();
+  ctx.fillStyle="#222"; ctx.textAlign="left"; ctx.textBaseline="middle";
+  ctx.font=`bold ${Math.round(unit*3.4)}px sans-serif`;
+  const done=blank?0:M.filled.size;
+  ctx.fillText(`${blank?"数字油画线稿":"数字油画"} · ${M.W}×${M.H} · ${M.colors.length} 色 · ${M.regions.length} 个区域${blank?"":" · 已填 "+done}`, margin, margin+titleH*0.5);
+  const ly=margin+titleH+M.H*s+chipGap*2;
+  M.colors.forEach((c,i)=>{
+    const col=i%perRow, row=(i/perRow)|0;
+    const lx=margin+col*(chipW+chipGap), yy=ly+row*(chipH+chipGap);
+    ctx.fillStyle=`rgb(${c[0]},${c[1]},${c[2]})`; ctx.fillRect(lx,yy,chipW,chipH);
+    ctx.strokeStyle="#bbb"; ctx.lineWidth=0.5; ctx.strokeRect(lx+0.25,yy+0.25,chipW,chipH);
+    const lum=0.299*c[0]+0.587*c[1]+0.114*c[2];
+    ctx.fillStyle=lum>140?"#22252b":"#ffffff";
+    ctx.font=`600 ${Math.round(unit*2.4)}px sans-serif`; ctx.textAlign="center";
+    ctx.fillText(`${i+1}号`, lx+chipW/2, yy+chipH/2+0.5);
+  });
+  ctx.fillStyle="#999"; ctx.textAlign="left";
+  ctx.font=`${Math.round(unit*2.6)}px sans-serif`;
+  ctx.fillText(blank?"按编号填色 · 编号对应下方色块":"点区域填色 · 双指缩放填小区域", margin, canvas.height-footH*0.4);
+  return true;
+}
+function pbFillAt(clientX,clientY){
+  const M=paintModel; if(!M) return;
+  const cv=document.getElementById('chart'), rc=cv.getBoundingClientRect();
+  if(!rc.width||!rc.height) return;
+  const x=Math.floor(((clientX-rc.left)*(cv.width/rc.width)-paintGeom.margin)/paintGeom.s);
+  const y=Math.floor(((clientY-rc.top)*(cv.height/rc.height)-paintGeom.margin-paintGeom.titleH)/paintGeom.s);
+  if(x<0||y<0||x>=M.W||y>=M.H) return;
+  const id=M.rid[y*M.W+x];
+  if(id<0||M.filled.has(id)) return;
+  M.filled.add(id); M.order.push(id);
+  render();
+}
+function paintUndo(){
+  const M=paintModel; if(!M||!M.order.length) return;
+  M.filled.delete(M.order.pop());
+  render();
+}
+function paintReset(){
+  const M=paintModel; if(!M) return;
+  M.filled.clear(); M.order.length=0;
+  render();
+}
+function paintDataURL(blank){
+  const cv=document.createElement('canvas');
+  drawPaint(cv,PB_EXPORT_W,!!blank);
+  render();
+  return cv.toDataURL('image/png');
+}
+function saveLineArt(){
+  if(!paintModel) return;
+  const url=paintDataURL(true), name=`数字油画线稿-${paintModel.W}x${paintModel.H}.png`;
+  if(HAS_NATIVE){ Android.saveImage(url,name); }
+  else { const a=document.createElement('a'); a.download=name; a.href=url; a.click(); }
+}
+function syncPaint(){
+  const M=paintModel, bar=document.getElementById('paintBar'), tip=document.getElementById('paintTip');
+  const show=isPaint();
+  bar.style.display=show?'':'none';
+  tip.style.display=show?'':'none';
+  if(!show||!M){ document.getElementById('paintProg').textContent=''; return; }
+  document.getElementById('fineVal').textContent=FINE_NAME[fineLevel()-1];
+  document.getElementById('paintProg').textContent=
+    `共 ${M.regions.length} 区 · 已填 ${M.filled.size} · 剩 ${M.regions.length-M.filled.size}`;
+  document.getElementById('stats').textContent=
+    `在线填色 · ${M.W}×${M.H} · ${M.colors.length} 色 · ${M.regions.length} 个区域 · 双指缩放填小区域`;
+}
+
 /* ===== 图纸渲染 ===== */
 function currentCounts(){
   const counts=new Map(); let total=0;
@@ -475,9 +1016,11 @@ function drawMain(canvas, cell){
   (document.getElementById('pbnOn').checked?drawPbn:drawChart)(canvas, cell);
 }
 function render(){
+  if(isPaint()&&paintModel){ syncPaint(); return drawPaint(document.getElementById('chart'),PB_RENDER_W,false); }
   // 高分辨率 backing：放大看色号不糊。格子上限 64px，总像素封顶 ~16M 防内存爆
   const cell=Math.max(20,Math.min(64,Math.floor(Math.sqrt(16e6/((grid.w+3)*(grid.h+3))))));
   drawMain(document.getElementById('chart'), cell);
+  syncPaint();
 }
 
 function drawChart(canvas, cell){
@@ -562,12 +1105,15 @@ function drawChart(canvas, cell){
 function isPbn(){ return document.getElementById('pbnOn').checked; }
 function exportDataURL(){
   const cv=document.createElement('canvas');
-  drawMain(cv,40);
+  if(isPaint()&&paintModel) drawPaint(cv,PB_EXPORT_W,false); else drawMain(cv,40);
   const url=cv.toDataURL('image/png');
   render();
   return url;
 }
-function fileName(){ return `${isPbn()?"数字油画":"拼豆图纸"}-MARD-${grid.w}x${grid.h}.png`; }
+function fileName(){
+  if(isPaint()&&paintModel) return `数字油画-${paintModel.W}x${paintModel.H}-${paintModel.filled.size}区.png`;
+  return `${isPbn()?"数字油画":"拼豆图纸"}-MARD-${grid.w}x${grid.h}.png`;
+}
 
 function savePNG(){
   if(!grid) return;
@@ -586,7 +1132,14 @@ function sharePNG(){
 function copyList(){
   if(!grid) return;
   let text;
-  if(isPbn()){
+  if(isPaint()&&paintModel){
+    const M=paintModel, blobs=new Array(M.colors.length).fill(0);
+    for(const r of M.regions) blobs[r.num-1]++;
+    const hex=c=>"#"+c.map(v=>v.toString(16).padStart(2,"0")).join("");
+    const lines=[`数字油画色号表`,`图 ${M.W}×${M.H} · ${M.colors.length} 色 · ${M.regions.length} 个区域`,""];
+    M.colors.forEach((c,i)=>lines.push(`${i+1}号 ${hex(c)} · ${blobs[i]} 区${M.filled.size?" · 已填":""}`));
+    text=lines.join("\n");
+  } else if(isPbn()){
     const R=buildRegions(grid.cells,grid.w,grid.h);
     const {codes,numByCode}=pbnCodes(R);
     const blobs={};
@@ -615,7 +1168,30 @@ document.getElementById('width').addEventListener('input',e=>{document.getElemen
 document.getElementById('width').addEventListener('change',regenerate);
 document.getElementById('dither').addEventListener('change',regenerate);
 document.getElementById('merge').addEventListener('change',regenerate);
-document.getElementById('pbnOn').addEventListener('change',regenerate);
+document.getElementById('pbnOn').addEventListener('change',e=>{
+  if(e.target.checked) document.getElementById('paintOn').checked=false;
+  regenerate();
+});
+/* 在线填色（电子数字油画）：与格子版互斥，勾选后才建模型 */
+document.getElementById('paintOn').addEventListener('change',e=>{
+  if(e.target.checked) document.getElementById('pbnOn').checked=false;
+  regenerate();
+});
+document.getElementById('fine').addEventListener('input',e=>{document.getElementById('fineVal').textContent=FINE_NAME[fineLevel()-1];});
+document.getElementById('fine').addEventListener('change',regenerate);
+/* 点一下=填色；拖动和双指缩放不当作填色 */
+let pbDown=null;
+document.getElementById('chart').addEventListener('pointerdown',e=>{
+  pbDown={x:e.clientX,y:e.clientY,t:Date.now()};
+});
+document.getElementById('chart').addEventListener('pointerup',e=>{
+  const d=pbDown; pbDown=null;
+  if(!d||!isPaint()||!paintModel) return;
+  const moved=Math.hypot(e.clientX-d.x,e.clientY-d.y)*(window.devicePixelRatio||1);
+  if(moved>14||Date.now()-d.t>600) return;
+  pbFillAt(e.clientX,e.clientY);
+});
+document.getElementById('chart').addEventListener('pointercancel',()=>pbDown=null);
 document.getElementById('maxColors').addEventListener('input',e=>{document.getElementById('maxColorsVal').textContent=e.target.value;});
 document.getElementById('maxColors').addEventListener('change',regenerate);
 document.getElementById('stockOn').addEventListener('change',()=>{refreshPalette();regenerate();});
