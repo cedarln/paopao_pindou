@@ -22,6 +22,8 @@
   #stockInfo { font-size:11px; color:#999; }
   button.mini { padding:5px 9px; font-size:12px; border-radius:6px; }
   button.mini.on { background:var(--accent); border-color:var(--accent); color:#fff; }
+  button.mini.dim { opacity:.4; }
+  #curColors { font-size:11px; color:#999; white-space:nowrap; }
   #stats { font-size:11px; color:#999; padding:6px 12px; }
   .tip { font-size:11px; color:#8a8a8e; padding:6px 12px; background:#fff; border-bottom:1px solid var(--line); }
   #stage { overflow:auto; padding:8px; }
@@ -54,6 +56,7 @@
   <button class="mini preset" data-n="96">96</button>
   <button class="mini preset" data-n="144">144</button>
   <button class="mini preset" data-n="221">221</button>
+  <span id="curColors"></span>
   <label><input type="checkbox" id="stockOn"> 只用我有豆</label>
   <input type="text" id="stockCodes" class="stock" placeholder="商家库存色号，如 A1 A5 F2 H7">
   <span id="stockInfo"></span>
@@ -158,14 +161,14 @@ function updateStockInfo(){
   el.textContent=set?`已识别 ${set.size} 色`:"未识别到有效色号";
 }
 function curMax(){ return parseInt(document.getElementById('maxColors').value)||221; }
-function paletteNote(){
+function paletteNote(numUsed){
   const parts=[];
   if(document.getElementById('stockOn').checked){
     const set=parseStock();
     parts.push(set?`库存 ${set.size} 色`:"库存未生效");
   }
   const max=curMax();
-  if(max<221) parts.push(`限 ${max} 色`);
+  if(max<221) parts.push(numUsed!==undefined && numUsed<max ? `限 ${max} 色·未触发` : `限 ${max} 色`);
   return parts.length?" · "+parts.join(" · "):"";
 }
 
@@ -189,7 +192,6 @@ function loadFile(file){
 /* ===== 像素化 + 匹配 ===== */
 function regenerate(){
   if(!srcImage) return;
-  syncPreset();
   const W=parseInt(document.getElementById('width').value);
   const H=Math.max(1,Math.round(W*srcImage.height/srcImage.width));
   const cv=document.createElement('canvas'); cv.width=W; cv.height=H;
@@ -227,6 +229,7 @@ function regenerate(){
   if(max<221) reduceToMaxColors(cells,max);
   grid={w:W,h:H,cells};
   render();
+  syncPreset();
 }
 
 /* 智能减色：把占比过低的杂色并入感知色差最近的保留色，迭代到稳定 */
@@ -311,7 +314,7 @@ function drawChart(canvas, cell){
   const {w,h,cells}=grid;
   const {counts,total,legend}=currentCounts();
   const margin=Math.round(cell*1.5);
-  const titleH=Math.round(cell*2.6);
+  const titleH=Math.round(cell*1.5);
   const chipW=Math.round(cell*4.6), chipH=Math.round(cell*1.15), chipGap=Math.round(cell*0.4);
   const perRow=Math.max(1,Math.floor((w*cell+2*margin)/(chipW+chipGap)));
   const legendRows=Math.ceil(legend.length/perRow);
@@ -322,12 +325,10 @@ function drawChart(canvas, cell){
   const ctx=canvas.getContext('2d');
   ctx.fillStyle="#fff"; ctx.fillRect(0,0,canvas.width,canvas.height);
   const ox=margin, oy=margin+titleH;
-  // v1.4 方案B：颂拼豆同款两行标题，第二行带「· MARD色号」小标注（商家认这套版式）
+  // v1.7：导出图去品牌（无 App 名/用户名），单行纯图纸信息 + MARD 标注
   ctx.textAlign="left"; ctx.textBaseline="middle";
-  ctx.fillStyle="#222"; ctx.font=`bold ${Math.round(cell*0.9)}px sans-serif`;
-  ctx.fillText("泡泡拼豆", 4, titleH*0.3);
-  ctx.font=`${Math.round(cell*0.72)}px sans-serif`;
-  ctx.fillText(`©临安 [${w}x${h}/${legend.length}色/共${total}颗] · MARD色号`, 4, titleH*0.72);
+  ctx.fillStyle="#222"; ctx.font=`bold ${Math.round(cell*0.8)}px sans-serif`;
+  ctx.fillText(`${w}×${h} 格 · ${legend.length} 色 · 共 ${total} 颗 · MARD色号`, 4, titleH*0.5);
   const codeFont=`${Math.max(4,Math.round(cell*0.42))}px sans-serif`;
   for(let y=0;y<h;y++){
     for(let x=0;x<w;x++){
@@ -383,7 +384,7 @@ function drawChart(canvas, cell){
   const stockActive=document.getElementById('stockOn').checked && parseStock();
   ctx.fillText(stockActive?`色号范围：商家库存 ${activeColors.length} 色 · 配色以实物色卡为准`:`色号体系 MARD 221（A~M）· 配色以实物色卡为准`, 4, canvas.height-footH/2);
   document.getElementById('stats').textContent =
-    `${w}×${h} 格 · ${total} 颗豆 · ${legend.length} 种色号${paletteNote()} · 双指缩放查看色号`;
+    `${w}×${h} 格 · ${total} 颗豆 · ${legend.length} 种色号${paletteNote(legend.length)} · 双指缩放查看色号`;
 }
 
 /* ===== 导出 / 分享 / 清单 / 更新 ===== */
@@ -439,11 +440,24 @@ document.getElementById('stockCodes').addEventListener('change',()=>{refreshPale
 document.getElementById('fit').addEventListener('change',e=>{
   document.getElementById('chart').classList.toggle('fit', e.target.checked);
 });
-/* 常用色预设：一键把限色设到 72/96/144/221 */
+/* 常用色预设：一键把限色设到 72/96/144/221；当前用色已≤预设时置灰提示 */
+function currentDistinct(){
+  if(!grid) return 0;
+  const s=new Set();
+  for(const c of grid.cells){ if(c) s.add(c.code); }
+  return s.size;
+}
 function syncPreset(){
-  const v=curMax();
+  const v=curMax(), d=currentDistinct();
   document.getElementById('maxColorsVal').textContent=v;
-  document.querySelectorAll('button.preset').forEach(b=>b.classList.toggle('on', parseInt(b.dataset.n)===v));
+  document.getElementById('curColors').textContent=grid?`当前 ${d} 色`:"";
+  document.querySelectorAll('button.preset').forEach(b=>{
+    const n=parseInt(b.dataset.n);
+    b.classList.toggle('on', n===v);
+    const useless=(n!==221 && n>=d); // 221=不限，任何时候可点
+    b.classList.toggle('dim', useless);
+    b.title=useless?`当前只用 ${d} 色，限 ${n} 色不会有变化`:"";
+  });
 }
 document.querySelectorAll('button.preset').forEach(b=>b.addEventListener('click',()=>{
   document.getElementById('maxColors').value=b.dataset.n;
