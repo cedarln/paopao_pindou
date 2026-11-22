@@ -49,6 +49,24 @@
   .sw.auto { width:auto; padding:0 9px; font-size:11px; background:#fff; color:var(--ink); }
   #customColor { width:30px; height:26px; padding:0; border:1px solid var(--line); border-radius:7px; background:#fff; }
   .pick { display:flex; align-items:center; gap:4px; font-size:11px; color:#666; white-space:nowrap; flex:0 0 auto; }
+  /* 表格弹窗：先看表，确认无误再导出到相册 */
+  #sheetMask { position:fixed; inset:0; background:rgba(20,20,24,.42); z-index:30; display:none; }
+  #sheetMask.on { display:flex; }
+  #sheetCard { background:#fff; margin:auto; width:min(94vw,720px); max-height:88vh; border-radius:14px; display:flex; flex-direction:column; overflow:hidden; box-shadow:0 8px 30px rgba(0,0,0,.28); }
+  #sheetHd { padding:11px 14px; border-bottom:1px solid var(--line); display:flex; align-items:center; gap:10px; }
+  #sheetHd b { flex:1; font-size:14px; }
+  #sheetHd small { color:#9a9a9e; font-size:11px; font-weight:400; }
+  #sheetBody { overflow:auto; padding:0 14px; -webkit-overflow-scrolling:touch; font-size:12px; }
+  #sheetBody .sec { font-size:11px; color:#8a8a8e; padding:10px 0 6px; line-height:1.6; }
+  table.tb { border-collapse:collapse; width:100%; }
+  table.tb th { position:sticky; top:0; background:#fff; color:#8a8a8e; font-weight:400; font-size:11px; text-align:left; padding:7px 6px; border-bottom:1px solid #c9c9ce; z-index:1; }
+  table.tb td { padding:6px; border-bottom:1px solid #f0f0f2; vertical-align:middle; }
+  table.tb td.c { text-align:center; font-weight:600; }
+  table.tb td.mut { color:#777; }
+  table.tb td.mono { font-family:ui-monospace,Menlo,monospace; color:#666; font-size:11px; }
+  table.tb i.chip { display:block; width:30px; height:15px; border-radius:4px; border:1px solid rgba(0,0,0,.18); }
+  #sheetFt { padding:10px 14px; border-top:1px solid var(--line); display:flex; gap:8px; }
+  #sheetFt button { flex:1; }
 </style>
 </head>
 <body>
@@ -88,7 +106,7 @@
   <input type="file" id="file" accept="image/*" style="display:none">
   <button onclick="savePNG()" id="btnSave">保存图纸</button>
   <button onclick="sharePNG()">分享</button>
-  <button onclick="copyList()" id="btnList">备料清单</button>
+  <button onclick="openSheet('nums')" id="btnList">备料清单</button>
 </div>
 
 <div id="beadGroup">
@@ -123,7 +141,7 @@
   <button class="mini" onclick="paintUndo()">撤销</button>
   <button class="mini" onclick="paintReset()">重置</button>
   <button class="mini" onclick="saveLineArt()">导出空白线稿</button>
-  <button class="mini" onclick="savePaintSheet()">颜料对照表</button>
+  <button class="mini" onclick="openSheet('sheet')">颜料对照表</button>
   <label><input type="checkbox" id="pbPreview"> 预览成品</label>
   <span id="paintProg"></span>
 </div>
@@ -138,6 +156,17 @@
 <div class="tip" id="tipBead2">商家说没有某个颜色？勾「只用我有豆」把商家色号粘进去；或点 72/96/144/221 预设、拖「限色」滑杆控制颜色数（221=不限）。</div>
 <div class="tip" id="paintTip" style="display:none">数字油画：画面按颜色自动分成曲线区域。画笔选「自动」点一下就填上该区域本身的颜色；选下面任意色块（或用吸管自选颜色）就能把任意区域涂成你想要的颜色。「精细度」越高区域越多越小，双指放大填小区域；勾「预览成品」直接看填完的样子。</div>
 <div id="stage"><canvas id="chart" class="fit"></canvas></div>
+
+<div id="sheetMask" onclick="if(event.target===this)closeSheet()">
+  <div id="sheetCard">
+    <div id="sheetHd"><b id="sheetTitle">表格</b><small id="sheetHint"></small><button class="mini" onclick="closeSheet()">关闭</button></div>
+    <div id="sheetBody"></div>
+    <div id="sheetFt">
+      <button id="sheetCopy" onclick="copyList()">复制文字</button>
+      <button class="primary" onclick="saveSheetImage()">导出到相册</button>
+    </div>
+  </div>
+</div>
 
 <script>
 "use strict";
@@ -1413,78 +1442,170 @@ function saveLineArt(){
   if(HAS_NATIVE){ Android.saveImage(url,name); }
   else { const a=document.createElement('a'); a.download=name; a.href=url; a.click(); }
 }
-/* 空白颜料对照表：打印后右列挤上实际颜料、写下管身色号，再照编号上色 */
-function drawPaintSheet(canvas){
-  const M=paintModel; if(!M) return false;
-  const lg=pbLegend(M, pbPreview()?'preview':'work');
-  const sum=paintSummary(M,lg), items=sum.items, rule=sum.rule;
-  if(!items.length) return false;
+/* 通用表格图：2480px 宽（A4 纵向 300dpi），列宽按权重分，长文本自动缩字号 */
+function drawSheet(canvas,o){
+  const rows=o.rows; if(!rows||!rows.length) return false;
   const W=2480, pad=Math.round(W*0.05), u=W/100;
-  const headH=Math.round(u*10), colHeadH=Math.round(u*5);
-  const cols=items.length>26?2:1;
-  const rows=Math.ceil(items.length/cols);
-  const rowH=Math.max(76,Math.min(126,Math.round(2260/rows)));
-  const footH=Math.round(u*6);
-  canvas.width=W; canvas.height=pad*2+headH+colHeadH+rows*rowH+footH;
+  const subFs=Math.round(u*2.0), subLineH=Math.round(u*2.7);
+  const footFs=Math.round(u*1.9), footLineH=Math.round(u*2.6);
+  const subs=o.sub?pbWrap(o.sub, W-pad*2, subFs):[];
+  const foots=o.foot?pbWrap(o.foot, W-pad*2, footFs):[];
+  const headH=Math.round(u*10)+Math.max(0,subs.length-1)*subLineH;
+  const colHeadH=Math.round(u*5), footH=Math.round(u*6)+Math.max(0,foots.length-1)*footLineH;
+  const perCol=o.perCol||26, maxCols=o.maxCols||4;
+  const cols=Math.min(maxCols, Math.max(1, Math.ceil(rows.length/perCol)));
+  const per=Math.ceil(rows.length/cols);
+  const rowH=Math.max(76,Math.min(126,Math.round(2260/per)));
+  canvas.width=W; canvas.height=pad*2+headH+colHeadH+per*rowH+footH;
   const ctx=canvas.getContext('2d');
   ctx.fillStyle="#fff"; ctx.fillRect(0,0,canvas.width,canvas.height);
   ctx.textBaseline="middle"; ctx.textAlign="left";
   ctx.fillStyle="#222"; ctx.font=`bold ${Math.round(u*3.4)}px sans-serif`;
-  ctx.fillText(`颜料对照表 · 数字油画 ${M.W}×${M.H} · ${rule.label} ${items.length}${rule.countWord}`, pad, pad+headH*0.32);
-  ctx.fillStyle="#8a8a8e"; ctx.font=`${Math.round(u*2.0)}px sans-serif`;
-  ctx.fillText(rule.sub+(sum.farN?`（△ ${sum.farN} 个没有接近的色，需自行调色）`:''), pad, pad+headH*0.74);
-  const gap=pad*0.4;
-  const colW=(W-pad*2-gap*(cols-1))/cols;
-  const numW=colW*0.105, swW=colW*0.16, nameW=colW*0.29, useW=colW*0.12;
-  const blankW=colW-numW-swW-nameW-useW;
+  ctx.fillText(o.title, pad, pad+Math.round(u*10)*0.32);
+  ctx.fillStyle="#8a8a8e"; ctx.font=`${subFs}px sans-serif`;
+  subs.forEach((s,i)=>ctx.fillText(s, pad, pad+Math.round(u*10)*0.74+i*subLineH));
+  const gap=pad*0.4, colW=(W-pad*2-gap*(cols-1))/cols;
+  const wSum=o.cols.reduce((a,c)=>a+c.w,0);
+  const cw=o.cols.map(c=>colW*c.w/wSum);
   const top0=pad+headH;
-  const heads=[['编号',numW],['画面颜色',swW],[rule.col,nameW],['用量',useW],['实物颜料（贴/写色号）',blankW]];
   for(let col=0;col<cols;col++){
-    const x0=pad+col*(colW+gap);
-    let hx=x0;
+    const x0=pad+col*(colW+gap); let hx=x0;
     ctx.fillStyle="#8a8a8e"; ctx.font=`${Math.round(u*1.9)}px sans-serif`; ctx.textAlign="left";
-    heads.forEach(hd=>{ ctx.fillText(hd[0], hx+u*0.4, top0+colHeadH*0.5); hx+=hd[1]; });
+    o.cols.forEach((c,i)=>{ ctx.fillText(c.h, hx+u*0.4, top0+colHeadH*0.5); hx+=cw[i]; });
     ctx.strokeStyle="#c9c9ce"; ctx.lineWidth=1.5;
     ctx.beginPath(); ctx.moveTo(x0,top0+colHeadH); ctx.lineTo(x0+colW,top0+colHeadH); ctx.stroke();
   }
   const top=top0+colHeadH;
-  items.forEach((it,k)=>{
-    const col=(k/rows)|0, row=k%rows;
+  rows.forEach((r,k)=>{
+    const col=(k/per)|0, row=k%per;
     const x0=pad+col*(colW+gap), yy=top+row*rowH;
-    const c=lg.list[it.nums[0]-1];
     ctx.strokeStyle="#dfe0e4"; ctx.lineWidth=1;
     ctx.beginPath(); ctx.moveTo(x0,yy+rowH-0.5); ctx.lineTo(x0+colW,yy+rowH-0.5); ctx.stroke();
     let cx=x0;
-    ctx.textAlign="center"; ctx.fillStyle="#222";
-    const ntxt=it.nums.join('+');
-    let nfs=Math.round(u*2.5); ctx.font=`600 ${nfs}px sans-serif`;
-    while(ctx.measureText(ntxt).width>numW-u*0.7 && nfs>Math.round(u*1.5)){ nfs-=1; ctx.font=`600 ${nfs}px sans-serif`; }
-    ctx.fillText(ntxt, cx+numW/2, yy+rowH/2); cx+=numW;
-    ctx.fillStyle=pbRGB(c); ctx.fillRect(cx+u*0.6,yy+rowH*0.24,swW-u*1.2,rowH*0.52);
-    ctx.strokeStyle="#c3c3c8"; ctx.lineWidth=1; ctx.strokeRect(cx+u*0.6+0.5,yy+rowH*0.24+0.5,swW-u*1.2-1,rowH*0.52-1); cx+=swW;
-    ctx.textAlign="left"; ctx.fillStyle="#222";
-    let fs=Math.round(u*2.4); ctx.font=`${fs}px sans-serif`;
-    while(ctx.measureText(it.name).width>nameW-u*1.2 && fs>u*1.6){ fs-=1; ctx.font=`${fs}px sans-serif`; }
-    ctx.fillText(it.name, cx+u*0.6, yy+rowH/2); cx+=nameW;
-    ctx.fillStyle="#777"; ctx.font=`${Math.round(u*2.1)}px sans-serif`;
-    ctx.fillText(`${it.cells} 区`, cx+u*0.5, yy+rowH/2); cx+=useW;
-    ctx.strokeStyle="#d9d9de"; ctx.setLineDash([u*0.8,u*0.8]); ctx.lineWidth=1;
-    ctx.strokeRect(cx+u*0.6,yy+rowH*0.2,blankW-u*1.2,rowH*0.6);
-    ctx.setLineDash([]);
+    o.cols.forEach((c,i)=>{
+      const cell=r[i]||{}, ww=cw[i];
+      if(c.k==='sw'){
+        ctx.fillStyle=cell.hex||"#fff"; ctx.fillRect(cx+u*0.6,yy+rowH*0.24,ww-u*1.2,rowH*0.52);
+        ctx.strokeStyle="#c3c3c8"; ctx.lineWidth=1; ctx.strokeRect(cx+u*0.6+0.5,yy+rowH*0.24+0.5,ww-u*1.2-1,rowH*0.52-1);
+      } else if(c.k==='blank'){
+        ctx.strokeStyle="#d9d9de"; ctx.setLineDash([u*0.8,u*0.8]); ctx.lineWidth=1;
+        ctx.strokeRect(cx+u*0.6,yy+rowH*0.2,ww-u*1.2,rowH*0.6); ctx.setLineDash([]);
+      } else if(cell.s){
+        const num=c.k==='num', mut=c.k==='m';
+        ctx.textAlign=num?"center":"left"; ctx.fillStyle=mut?"#777":"#222";
+        let fs=Math.round(u*(num?2.5:mut?2.1:2.4));
+        const minFs=Math.round(u*(num?1.5:1.6));
+        ctx.font=`${num?"600 ":""}${fs}px sans-serif`;
+        while(ctx.measureText(cell.s).width>ww-u*(num?0.7:1.2) && fs>minFs){ fs-=1; ctx.font=`${num?"600 ":""}${fs}px sans-serif`; }
+        ctx.fillText(cell.s, num?cx+ww/2:cx+u*0.6, yy+rowH/2);
+      }
+      cx+=ww;
+    });
   });
-  ctx.fillStyle="#999"; ctx.textAlign="left"; ctx.font=`${Math.round(u*1.9)}px sans-serif`;
-  ctx.fillText(`泡泡拼豆 · ${rule.label} · 按用量从多到少 · ${rule.merge} · ${rule.srcNote}`,
-    pad, canvas.height-pad*0.45);
+  ctx.fillStyle="#999"; ctx.textAlign="left"; ctx.font=`${footFs}px sans-serif`;
+  foots.forEach((s,i)=>ctx.fillText(s, pad, canvas.height-pad*0.45-(foots.length-1-i)*footLineH));
   return true;
 }
-function savePaintSheet(){
-  if(!paintModel) return;
+
+/* ===== 表格弹窗：先看到表本身，再决定要不要存图 =====
+   弹窗里的表格和「导出到相册」的图片共用 sheetData 一份数据，不会出现看到的和存下来的不一致 */
+let sheetKind='';
+function sheetData(kind){
+  if(kind==='sheet'){
+    if(!paintModel) return null;
+    const M=paintModel, lg=pbLegend(M,pbPreview()?'preview':'work'), sum=paintSummary(M,lg);
+    if(!sum.items.length) return null;
+    const rule=sum.rule;
+    const cols=[{h:'编号',w:0.105,k:'num'},{h:'画面颜色',w:0.16,k:'sw'},{h:rule.col,w:0.29,k:'t'},{h:'用量',w:0.12,k:'m'}];
+    const rows=sum.items.map(it=>{ const c=lg.list[it.nums[0]-1];
+      return [{s:it.nums.join('+')},{hex:pbRGB(c)},{s:it.name},{s:`${it.cells} 区`}]; });
+    return { kind:'sheet', title:'颜料对照表', hint:`${rule.label} · ${sum.items.length}${rule.countWord} · 按用量排序`, copy:false,
+      fileName:`颜料对照表-${M.W}x${M.H}.png`, cols, rows,
+      sec:`导出图另有「实物颜料（贴/写色号）」空白列：打印后把颜料挤上去、写上管身色号，再照编号上色。`+
+          (sum.farN?` △ ${sum.farN} 个没有接近的色，需自行调色。`:''),
+      img:{
+        title:`颜料对照表 · 数字油画 ${M.W}×${M.H} · ${rule.label} ${sum.items.length}${rule.countWord}`,
+        sub:rule.sub+(sum.farN?`（△ ${sum.farN} 个没有接近的色，需自行调色）`:''),
+        cols:cols.concat([{h:'实物颜料（贴/写色号）',w:0.325,k:'blank'}]),
+        rows:rows.map(r=>r.concat([{s:''}])),
+        foot:`泡泡拼豆 · ${rule.label} · 按用量从多到少 · ${rule.merge} · ${rule.srcNote}`
+      } };
+  }
+  if(isPaint()){
+    if(!paintModel) return null;
+    const M=paintModel, {lg,blobs,labels}=paintNumRows(), sum=paintSummary(M,lg), rule=sum.rule;
+    if(!lg.list.length) return null;
+    const cols=[{h:'编号',w:0.08,k:'num'},{h:'画面颜色',w:0.14,k:'sw'},{h:'画面色值',w:0.14,k:'mono'},{h:rule.col,w:0.50,k:'t'},{h:'区域数',w:0.14,k:'m'}];
+    const rows=lg.list.map((c,i)=>[{s:`${i+1}`},{hex:pbRGB(c)},{s:pbHex(c).toUpperCase()},{s:labels[i]},{s:`${blobs[i]} 区`}]);
+    return { kind:'nums', title:'色号表', hint:`${M.W}×${M.H} · ${lg.list.length} 色 · ${M.regions.length} 个区域`, copy:true,
+      fileName:`数字油画色号表-${M.W}x${M.H}.png`, cols, rows, sec:sum.text,
+      img:{
+        title:`色号表 · 数字油画 ${M.W}×${M.H} · ${lg.list.length} 色 · ${M.regions.length} 个区域`,
+        sub:`按画面编号排列 · ${rule.label}（${rule.note}）${sum.farN?` · △ ${sum.farN} 个没有接近的色，需自行调色`:''}`,
+        cols, rows,
+        foot:`泡泡拼豆 · ${rule.foot}`
+      } };
+  }
+  if(!grid) return null;
+  const {counts,total,legend}=currentCounts();
+  if(!legend.length) return null;
+  const cols=[{h:'色号',w:0.16,k:'num'},{h:'颜色',w:0.2,k:'sw'},{h:'数量',w:0.22,k:'m'},{h:'占比',w:0.18,k:'m'}];
+  const rows=legend.map(c=>{ const n=counts.get(c.code);
+    return [{s:c.code},{hex:c.hex},{s:`${n} 颗`},{s:(n/total*100).toFixed(1)+'%'}]; });
+  return { kind:'nums', title:'备料清单', hint:`${legend.length} 种色号 · 共 ${total} 颗`, copy:true,
+    fileName:`拼豆备料清单-MARD-${grid.w}x${grid.h}.png`, cols, rows,
+    img:{
+      title:`备料清单 · MARD 221 色号（A~M） · 图纸 ${grid.w}×${grid.h} 格`,
+      sub:`${legend.length} 种色号 · 共 ${total} 颗`,
+      cols, rows,
+      foot:'泡泡拼豆 · 数量按图纸格子统计，实际用量以色号对应豆子为准'
+    } };
+}
+function sheetTable(d){
+  const t=document.createElement('table'); t.className='tb';
+  const hd=document.createElement('thead'), htr=document.createElement('tr');
+  d.cols.forEach(c=>{ const th=document.createElement('th'); th.textContent=c.h; htr.appendChild(th); });
+  hd.appendChild(htr); t.appendChild(hd);
+  const bd=document.createElement('tbody');
+  d.rows.forEach(r=>{
+    const tr=document.createElement('tr');
+    r.forEach((cell,i)=>{
+      const c=d.cols[i], td=document.createElement('td');
+      if(c.k==='sw'){ const s=document.createElement('i'); s.className='chip'; s.style.background=cell.hex; td.appendChild(s); }
+      else { td.textContent=cell.s||''; if(c.k==='num')td.className='c'; else if(c.k==='m')td.className='mut'; else if(c.k==='mono')td.className='mono'; }
+      tr.appendChild(td);
+    });
+    bd.appendChild(tr);
+  });
+  t.appendChild(bd);
+  return t;
+}
+function openSheet(kind){
+  if(!srcImage) return;
+  const d=sheetData(kind);
+  if(!d) return;
+  sheetKind=kind;
+  document.getElementById('sheetTitle').textContent=d.title;
+  document.getElementById('sheetHint').textContent=d.hint;
+  document.getElementById('sheetCopy').style.display=d.copy?'':'none';
+  const body=document.getElementById('sheetBody');
+  body.innerHTML='';
+  body.appendChild(sheetTable(d));
+  if(d.sec){ const p=document.createElement('div'); p.className='sec'; p.textContent=d.sec; body.appendChild(p); }
+  document.getElementById('sheetMask').classList.add('on');
+  body.scrollTop=0;
+}
+function closeSheet(){ document.getElementById('sheetMask').classList.remove('on'); sheetKind=''; }
+/* 存的就是弹窗里看到的那张表 */
+function saveSheetImage(){
+  if(!sheetKind) return;
+  const d=sheetData(sheetKind);
+  if(!d) return;
   const cv=document.createElement('canvas');
-  if(!drawPaintSheet(cv)) return;
+  if(!drawSheet(cv,d.img)) return;
   const url=cv.toDataURL('image/png');
-  const name=`颜料对照表-${paintModel.W}x${paintModel.H}.png`;
-  if(HAS_NATIVE){ Android.saveImage(url,name); }
-  else { const a=document.createElement('a'); a.download=name; a.href=url; a.click(); }
+  if(HAS_NATIVE){ Android.saveImage(url,d.fileName); }
+  else { const a=document.createElement('a'); a.download=d.fileName; a.href=url; a.click(); }
 }
 
 function syncPaint(){
@@ -1631,30 +1752,37 @@ function sharePNG(){
     fetch(url).then(r=>r.blob()).then(b=>navigator.share({files:[new File([b],fileName(),{type:'image/png'})]})).catch(()=>{});
   } else { savePNG(); }
 }
-function copyList(){
-  if(!srcImage) return;
-  let text;
+/* 画面编号 -> 就近颜料 -> 区域数：色号表、颜料清单、导出图共用，避免三处算法不一致 */
+function paintNumRows(){
+  const M=paintModel, lg=pbLegend(M,pbPreview()?'preview':'work');
+  const blobs=new Array(lg.list.length).fill(0);
+  for(const r of M.regions){ const n=lg.nums.get(r.id); if(n) blobs[n-1]++; }
+  return {M,lg,blobs,labels:paintLabels(lg.list,true)};
+}
+function listText(){
   if(isPaint()&&paintModel){
-    const M=paintModel, lg=pbLegend(M,pbPreview()?'preview':'work');
-    const blobs=new Array(lg.list.length).fill(0);
-    for(const r of M.regions){ const n=lg.nums.get(r.id); if(n) blobs[n-1]++; }
+    const {M,lg,blobs,labels}=paintNumRows();
     const lines=[`数字油画色号表`,`图 ${M.W}×${M.H} · ${lg.list.length} 色 · ${M.regions.length} 个区域${pbPreview()?" · 成品":""}`,""];
-    lg.list.forEach((c,i)=>lines.push(`${i+1}号 ${pbHex(c)} ≈${paintLabels(lg.list,true)[i]} · ${blobs[i]} 区`));
+    lg.list.forEach((c,i)=>lines.push(`${i+1}号 ${pbHex(c)} ≈${labels[i]} · ${blobs[i]} 区`));
     const sum=paintSummary(M,lg);
     lines.push("",`${sum.rule.label} 颜料清单 ${sum.items.length}${sum.rule.countWord}（${sum.rule.note}${sum.farN?` · △${sum.farN} 需自调`:""}，按用量排序）`);
     sum.items.forEach(it=>lines.push(`  ${it.name} · ${it.nums.join("+")}号 · ${it.cells} 区`));
     lines.push(sum.rule.srcNote+(sum.farN?` · △${sum.farN} 个没有接近的色，需自行调色`:""));
-    text=lines.join("\n");
-  } else {
-    const {counts,total,legend}=currentCounts();
-    const lines=[`拼豆备料清单 · MARD 221 色号（A~M）`,`图纸 ${grid.w}×${grid.h} 格 · 共 ${total} 颗 · ${legend.length} 种色号`,""];
-    for(const c of legend) lines.push(`${c.code} × ${counts.get(c.code)}`);
-    text=lines.join("\n");
+    return lines.join("\n");
   }
+  const {counts,total,legend}=currentCounts();
+  const lines=[`拼豆备料清单 · MARD 221 色号（A~M）`,`图纸 ${grid.w}×${grid.h} 格 · 共 ${total} 颗 · ${legend.length} 种色号`,""];
+  for(const c of legend) lines.push(`${c.code} × ${counts.get(c.code)}`);
+  return lines.join("\n");
+}
+function copyList(){
+  if(!srcImage) return;
+  const text=listText();
   if(HAS_NATIVE){ Android.copyText(text); }
   else if(navigator.clipboard){ navigator.clipboard.writeText(text).then(()=>alert("清单已复制")); }
   else { prompt("长按复制清单：", text); }
 }
+
 function checkUpdate(){
   if(HAS_NATIVE){ Android.checkUpdate(); }
   else { alert("请在安卓 App 内使用检查更新"); }
