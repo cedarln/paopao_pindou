@@ -12,6 +12,7 @@
   header h1 { margin:0; font-size:16px; flex:1; }
   header h1 small { color:#bbb; font-weight:400; font-size:11px; }
   .bar { background:#fff; border-bottom:1px solid var(--line); padding:8px 12px; display:flex; flex-wrap:wrap; gap:8px; align-items:center; font-size:12px; }
+  .bar select { font-size:12px; padding:3px 4px; border:1px solid var(--line); border-radius:6px; background:#fff; color:var(--ink); }
   button { border:1px solid var(--line); background:#fff; border-radius:8px; padding:8px 12px; font-size:13px; cursor:pointer; color:var(--ink); }
   button.primary { background:var(--accent); border-color:var(--accent); color:#fff; }
   button:active { filter:brightness(.92); }
@@ -112,6 +113,13 @@
 
 <div class="bar" id="paintBar" style="display:none">
   <label>精细度 <input type="range" id="fine" min="1" max="5" value="3"><span class="num" id="fineVal">标准</span></label>
+  <label>色号规则 <select id="paintLine" onchange="setPaintLine(this.value)">
+    <option value="acrylic">马利丙烯 · 色号</option>
+    <option value="oil">马利油画 · 色号</option>
+    <option value="gouache">马利水粉 · 仅色名</option>
+    <option value="ral">RAL 经典 · 工业色号</option>
+    <option value="hex">十六进制 · 画面色值</option>
+  </select></label>
   <button class="mini" onclick="paintUndo()">撤销</button>
   <button class="mini" onclick="paintReset()">重置</button>
   <button class="mini" onclick="saveLineArt()">导出空白线稿</button>
@@ -184,72 +192,380 @@ function ciede2000(l1,a1,b1,l2,a2,b2){
   return Math.sqrt(dl*dl+dc*dc+dh*dh+Rt*dc*dh);
 }
 
-/* ===== 马利 水粉/丙烯 常用色名（RGB 为近似值，仅供标注参考，实物以色卡为准） ===== */
-const PAINT_COLORS = [
-["钛白","#F7F7F5"],["锌白","#F2F3EF"],
-["浅灰","#D9D9D9"],["中灰","#9E9EA0"],["深灰","#5B5B5E"],["佩恩灰","#3B4A57"],
-["煤黑","#17161A"],["象牙黑","#211F1C"],
-["柠檬黄","#F3E667"],["淡黄","#F7EC9B"],["中黄","#F6CE3C"],["镉黄","#F3B805"],
-["土黄","#C9974B"],["那坡里黄","#EDDCAE"],["橙黄","#F0A202"],
-["朱红","#E4512A"],["橘红","#F06A3D"],["大红","#D8202E"],["深红","#B01E22"],
-["曙红","#E02E55"],["玫瑰红","#C4265C"],["胭脂","#7A2233"],["粉红","#F2AEB8"],
-["紫罗兰","#6A4C93"],["青莲","#4B3B8F"],
-["天蓝","#5AA6D6"],["湖蓝","#1F7A8C"],["钴蓝","#1D4FA3"],["群青","#2E4393"],["普蓝","#0F3057"],
-["淡绿","#A9D69B"],["草绿","#6FA03C"],["翠绿","#0FA36B"],["中绿","#2E8B57"],["深绿","#17694A"],
-["橄榄绿","#6B7B3A"],["粉绿","#B9CDB4"],
-["赭石","#B56A3B"],["褐","#8C6B4F"],["熟褐","#7B4A34"],["土红","#A0442E"]
-].map(function(it){
-  const hex=it[1];
-  return {name:it[0], hex:hex, rgb:[parseInt(hex.slice(1,3),16),parseInt(hex.slice(3,5),16),parseInt(hex.slice(5,7),16)]};
-});
-PAINT_COLORS.forEach(function(c){ c.lab=rgb2lab(c.rgb[0],c.rgb[1],c.rgb[2]); });
+/* ===== 色号规则：三条马利产品线 + RAL 经典 + 十六进制 =====
+   马利色号来自经销商清单与电商单支 SKU 交叉核对（丙烯与油画共用同一套三位数色号，但在售色域不同；
+   水粉线全渠道只按色名点色，没有公认的数字色号）。马利官方从未公布色号表，也没有任何 RGB/Lab 色值，
+   所以色值是近似估值——标注只保证「这条线里就近的那一支」，实物以色卡为准。
+   RAL 为工业漆标准，美术管色上不印这个号；215 条色值取自 github.com/ieskudero/ral-colors（MIT，
+   社区对照值，非 RAL 官方数字色库）。十六进制不做任何映射，直接标画面自身的色值。 */
+const PAINT_LINES = {
+  acrylic:{ label:'马利丙烯', col:'丙烯色号/色名', hasCode:true, countWord:' 支', note:'同色号共用一支', merge:'同色号已合并（一支涂这几个区）',
+    sub:'右列挤上实际颜料、写上管身色号；中间一列是就近的马利丙烯色号，上色前以这一行比对为准',
+    foot:'颜色对应马利丙烯色号（色号来自经销商清单，色值近似，以实物色卡为准；△=需自调）',
+    srcNote:'色号来自经销商清单，马利官方未公布色值，以实物色卡为准',
+    colors:[
+    ["104","钛白","#F7F7F5"],["106","锌钛白","#F4F5F1"],
+    ["215","柠檬黄","#F3E667"],["216","淡黄","#F7EC9B"],["227","中黄","#F6CE3C"],["210","那坡里黄","#EDDCAE"],
+    ["301","桔黄","#F0A202"],["324","朱红","#E4512A"],["313","桔红","#F06A3D"],["302","大红","#D8202E"],
+    ["315","深红","#B01E22"],["336","玫瑰红","#C4265C"],
+    ["439","紫色","#6F4E9E"],["443","群青","#2E4393"],["447","天蓝","#5AA6D6"],["450","酞青蓝","#17558C"],
+    ["453","钴蓝","#1D4FA3"],["455","湖蓝","#1F7A8C"],
+    ["503","淡绿","#A9D69B"],["505","中绿","#2E8B57"],["558","酞青绿","#12876B"],["559","粉绿","#B9CDB4"],
+    ["560","翠绿","#0FA36B"],["568","草绿","#6FA03C"],["569","橄榄绿","#6B7B3A"],
+    ["675","生赭","#C08A4E"],["676","土黄","#C9974B"],["681","土红","#A0442E"],["684","赭石","#B56A3B"],
+    ["687","熟褐","#7B4A34"],["688","生褐","#8C6B4F"],["690","威狄克棕","#6B4A38"],
+    ["342","红灰","#A98184"],["343","橙灰","#B08D74"],["460","蓝灰","#8593A5"],["576","绿灰","#8FA393"],
+    ["694","棕灰","#8B7D70"],["781","黄灰","#A8A183"],["798","灰色","#9E9EA0"],
+    ["797","佩恩灰","#3B4A57"],["793","黑色","#1B1A1D"]
+  ]},
+  oil:{ label:'马利油画', col:'油画色号/色名', hasCode:true, countWord:' 支', note:'同色号共用一支', merge:'同色号已合并（一支涂这几个区）',
+    sub:'右列挤上实际颜料、写上管身色号；中间一列是就近的马利油画色号，上色前以这一行比对为准',
+    foot:'颜色对应马利油画色号（色号来自经销商清单，色值近似，以实物色卡为准；△=需自调）',
+    srcNote:'色号来自经销商清单，马利官方未公布色值，以实物色卡为准',
+    colors:[
+    ["103","锌白","#F2F3EF"],["104","钛白","#F7F7F5"],["106","锌钛白","#F4F5F1"],
+    ["215","柠檬黄","#F3E667"],["216","淡黄","#F7EC9B"],["204","中铬黄","#F6CE3C"],["208","深铬黄","#F0B429"],
+    ["210","那坡里黄","#EDDCAE"],["217","印度黄","#E8C33A"],["219","肉色","#F2D2B3"],["228","桔铬黄","#FBA919"],
+    ["301","桔黄","#F0A202"],["324","朱红","#E4512A"],["313","桔红","#F06A3D"],["302","大红","#D8202E"],
+    ["314","亮红","#E03B3B"],["315","深红","#B01E22"],["334","茜素红","#B23053"],["335","西洋红","#BE3F56"],
+    ["336","玫瑰红","#C4265C"],
+    ["402","紫罗兰","#6A4C93"],["403","紫红","#A63A6B"],["435","马利紫","#5B4A8F"],["443","群青","#2E4393"],
+    ["445","普蓝","#0F3057"],["448","孔雀蓝","#0E8B9E"],["450","酞菁蓝","#17558C"],["453","钴蓝","#1D4FA3"],
+    ["455","湖蓝","#1F7A8C"],
+    ["503","淡绿","#A9D69B"],["505","中绿","#2E8B57"],["509","浅绿","#B7DCB0"],["559","粉绿","#B9CDB4"],
+    ["560","翠绿","#0FA36B"],["562","黄绿","#9BC14C"],["568","草绿","#6FA03C"],["569","橄榄绿","#6B7B3A"],
+    ["573","深铬绿","#17694A"],
+    ["601","生赭","#C08A4E"],["676","土黄","#C9974B"],["677","透明铁黄","#C89A54"],["681","土红","#A0442E"],
+    ["682","透明铁红","#A8492F"],["684","赭石","#B56A3B"],["687","熟褐","#7B4A34"],["688","生褐","#8C6B4F"],
+    ["690","威狄克棕","#6B4A38"],
+    ["342","红灰","#A98184"],["343","橙灰","#B08D74"],["460","蓝灰","#8593A5"],["576","绿灰","#8FA393"],
+    ["694","棕灰","#8B7D70"],
+    ["768","浅灰","#D9D9D9"],["781","黄灰","#A8A183"],["785","深灰","#5B5B5E"],["787","中灰","#9E9EA0"],
+    ["791","麻斯黑","#2A2622"],["792","象牙黑","#211F1C"],["794","煤黑","#17161A"],["795","冷灰","#8C949C"],
+    ["796","暖灰","#A29A8E"],["797","佩恩灰","#3B4A57"]
+  ]},
+  gouache:{ label:'马利水粉', col:'水粉色名（无数字色号）', hasCode:false, countWord:' 支', note:'同名共用一支', merge:'同名已合并（一支涂这几个区）',
+    sub:'水粉线没有公认数字色号，右列按色名挤颜料；中间一列是就近色名，上色前以这一行比对为准',
+    foot:'颜色对应马利水粉色名（水粉线无公认数字色号；色值近似，以实物色卡为准；△=需自调）',
+    srcNote:'水粉线无公认数字色号，按色名购买即可；色值为近似估值',
+    colors:[
+    ["","钛白","#F7F7F5"],["","锌白","#F2F3EF"],
+    ["","浅灰","#D9D9D9"],["","中灰","#9E9EA0"],["","深灰","#5B5B5E"],["","佩恩灰","#3B4A57"],
+    ["","煤黑","#17161A"],["","象牙黑","#211F1C"],
+    ["","柠檬黄","#F3E667"],["","淡黄","#F7EC9B"],["","中黄","#F6CE3C"],["","镉黄","#F3B805"],
+    ["","土黄","#C9974B"],["","那坡里黄","#EDDCAE"],["","橙黄","#F0A202"],
+    ["","朱红","#E4512A"],["","橘红","#F06A3D"],["","大红","#D8202E"],["","深红","#B01E22"],
+    ["","曙红","#E02E55"],["","玫瑰红","#C4265C"],["","胭脂","#7A2233"],["","粉红","#F2AEB8"],
+    ["","紫罗兰","#6A4C93"],["","青莲","#4B3B8F"],
+    ["","天蓝","#5AA6D6"],["","湖蓝","#1F7A8C"],["","钴蓝","#1D4FA3"],["","群青","#2E4393"],["","普蓝","#0F3057"],
+    ["","淡绿","#A9D69B"],["","草绿","#6FA03C"],["","翠绿","#0FA36B"],["","中绿","#2E8B57"],["","深绿","#17694A"],
+    ["","橄榄绿","#6B7B3A"],["","粉绿","#B9CDB4"],
+    ["","赭石","#B56A3B"],["","褐","#8C6B4F"],["","熟褐","#7B4A34"],["","土红","#A0442E"]
+  ]},
+  ral:{ label:'RAL 经典', col:'RAL 色号/色名', hasCode:true, countWord:' 支', note:'同色号共用一支', merge:'同色号已合并（一支涂这几个区）',
+    chipCodeOnly:true,
+    sub:'RAL 是工业漆标准，美术管装颜料上不印这个号；适合按 RAL 机调丙烯漆、自喷漆或彩色钢板',
+    foot:'颜色对应 RAL 经典色号（工业漆标准，美术管色无此号；色值为社区对照近似值；△=色差较大）',
+    srcNote:'RAL 官方未公开数字色值，此处取自社区对照表 github.com/ieskudero/ral-colors（MIT）',
+    colors:[
+    ["RAL 1000","Green beige","#CDBA88"],
+    ["RAL 1001","Beige","#D0B084"],
+    ["RAL 1002","Sand yellow","#D2AA6D"],
+    ["RAL 1003","Signal yellow","#F9A800"],
+    ["RAL 1004","Golden yellow","#E49E00"],
+    ["RAL 1005","Honey yellow","#CB8E00"],
+    ["RAL 1006","Maize yellow","#E29000"],
+    ["RAL 1007","Daffodil yellow","#E88C00"],
+    ["RAL 1011","Brown beige","#AF804F"],
+    ["RAL 1012","Lemon yellow","#DDAF27"],
+    ["RAL 1013","Oyster white","#E3D9C6"],
+    ["RAL 1014","Ivory","#DDC49A"],
+    ["RAL 1015","Light ivory","#E6D2B5"],
+    ["RAL 1016","Sulfur yellow","#F1DD38"],
+    ["RAL 1017","Saffron yellow","#F6A950"],
+    ["RAL 1018","Zinc yellow","#FACA30"],
+    ["RAL 1019","Grey beige","#A48F7A"],
+    ["RAL 1020","Olive yellow","#A08F65"],
+    ["RAL 1021","Colza yellow","#F6B600"],
+    ["RAL 1023","Traffic yellow","#F7B500"],
+    ["RAL 1024","Ochre yellow","#BA8F4C"],
+    ["RAL 1026","Luminous yellow","#FFFF00"],
+    ["RAL 1027","Curry","#A77F0E"],
+    ["RAL 1028","Melon yellow","#FF9B00"],
+    ["RAL 1032","Broom yellow","#E2A300"],
+    ["RAL 1033","Dahlia yellow","#F99A1C"],
+    ["RAL 1034","Pastel yellow","#EB9C52"],
+    ["RAL 1035","Pearl beige","#908370"],
+    ["RAL 1036","Pearl gold","#80643F"],
+    ["RAL 1037","Sun yellow","#F09200"],
+    ["RAL 2000","Yellow orange","#DD7907"],
+    ["RAL 2001","Red orange","#BE4E20"],
+    ["RAL 2002","Vermilion","#C63927"],
+    ["RAL 2003","Pastel orange","#FA842B"],
+    ["RAL 2004","Pure orange","#E75B12"],
+    ["RAL 2005","Luminous orange","#FF2300"],
+    ["RAL 2007","Luminous bright orange","#FFA421"],
+    ["RAL 2008","Bright red orange","#F3752C"],
+    ["RAL 2009","Traffic orange","#E15501"],
+    ["RAL 2010","Signal orange","#D4652F"],
+    ["RAL 2011","Deep orange","#EC7C25"],
+    ["RAL 2012","Salmon orange","#DB6A50"],
+    ["RAL 2013","Pearl orange","#954527"],
+    ["RAL 2017","RAL orange","#FA4402"],
+    ["RAL 3000","Flame red","#AB2524"],
+    ["RAL 3001","Signal red","#A02128"],
+    ["RAL 3002","Carmine red","#A1232B"],
+    ["RAL 3003","Ruby red","#8D1D2C"],
+    ["RAL 3004","Purple red","#701F29"],
+    ["RAL 3005","Wine red","#5E2028"],
+    ["RAL 3007","Black red","#402225"],
+    ["RAL 3009","Oxide red","#703731"],
+    ["RAL 3011","Brown red","#7E292C"],
+    ["RAL 3012","Beige red","#CB8D73"],
+    ["RAL 3013","Tomato red","#9C322E"],
+    ["RAL 3014","Antique pink","#D47479"],
+    ["RAL 3015","Light pink","#E1A6AD"],
+    ["RAL 3016","Coral red","#AC4034"],
+    ["RAL 3017","Rose","#D3545F"],
+    ["RAL 3018","Strawberry red","#D14152"],
+    ["RAL 3020","Traffic red","#C1121C"],
+    ["RAL 3022","Salmon pink","#D56D56"],
+    ["RAL 3024","Luminous red","#F70000"],
+    ["RAL 3026","Luminous bright red","#FF0000"],
+    ["RAL 3027","Raspberry red","#B42041"],
+    ["RAL 3028","Pure red","#E72512"],
+    ["RAL 3031","Orient red","#AC323B"],
+    ["RAL 3032","Pearl ruby red","#711521"],
+    ["RAL 3033","Pearl pink","#B24C43"],
+    ["RAL 4001","Red lilac","#8A5A83"],
+    ["RAL 4002","Red violet","#933D50"],
+    ["RAL 4003","Heather violet","#D15B8F"],
+    ["RAL 4004","Claret violet","#691639"],
+    ["RAL 4005","Blue lilac","#83639D"],
+    ["RAL 4006","Traffic purple","#992572"],
+    ["RAL 4007","Purple violet","#4A203B"],
+    ["RAL 4008","Signal violet","#904684"],
+    ["RAL 4009","Pastel violet","#A38995"],
+    ["RAL 4010","Telemagenta","#C63678"],
+    ["RAL 4011","Pearl violet","#8773A1"],
+    ["RAL 4012","Pearl blackberry","#6B6880"],
+    ["RAL 5000","Violet blue","#384C70"],
+    ["RAL 5001","Green blue","#1F4764"],
+    ["RAL 5002","Ultramarine blue","#2B2C7C"],
+    ["RAL 5003","Sapphire blue","#2A3756"],
+    ["RAL 5004","Black blue","#1D1F2A"],
+    ["RAL 5005","Signal blue","#154889"],
+    ["RAL 5007","Brilliant blue","#41678D"],
+    ["RAL 5008","Grey blue","#313C48"],
+    ["RAL 5009","Azure blue","#2E5978"],
+    ["RAL 5010","Gentian blue","#13447C"],
+    ["RAL 5011","Steel blue","#232C3F"],
+    ["RAL 5012","Light blue","#3481B8"],
+    ["RAL 5013","Cobalt blue","#232D53"],
+    ["RAL 5014","Pigeon blue","#6C7C98"],
+    ["RAL 5015","Sky blue","#2874B2"],
+    ["RAL 5017","Traffic blue","#0E518D"],
+    ["RAL 5018","Turquoise blue","#21888F"],
+    ["RAL 5019","Capri blue","#1A5784"],
+    ["RAL 5020","Ocean blue","#0B4151"],
+    ["RAL 5021","Water blue","#07737A"],
+    ["RAL 5022","Night blue","#2F2A5A"],
+    ["RAL 5023","Distant blue","#4D668E"],
+    ["RAL 5024","Pastel blue","#6A93B0"],
+    ["RAL 5025","Pearl Gentian blue","#296478"],
+    ["RAL 5026","Pearl night blue","#102C54"],
+    ["RAL 6000","Patina green","#327662"],
+    ["RAL 6001","Emerald green","#28713E"],
+    ["RAL 6002","Leaf green","#276235"],
+    ["RAL 6003","Olive green","#4B573E"],
+    ["RAL 6004","Blue green","#0E4243"],
+    ["RAL 6005","Moss green","#0F4336"],
+    ["RAL 6006","Grey olive","#40433B"],
+    ["RAL 6007","Bottle green","#283424"],
+    ["RAL 6008","Brown green","#35382E"],
+    ["RAL 6009","Fir green","#26392F"],
+    ["RAL 6010","Grass green","#3E753B"],
+    ["RAL 6011","Reseda green","#68825B"],
+    ["RAL 6012","Black green","#31403D"],
+    ["RAL 6013","Reed green","#797C5A"],
+    ["RAL 6014","Yellow olive","#444337"],
+    ["RAL 6015","Black olive","#3D403A"],
+    ["RAL 6016","Turquoise green","#026A52"],
+    ["RAL 6017","May green","#468641"],
+    ["RAL 6018","Yellow green","#48A43F"],
+    ["RAL 6019","Pastel green","#B7D9B1"],
+    ["RAL 6020","Chrome green","#354733"],
+    ["RAL 6021","Pale green","#86A47C"],
+    ["RAL 6022","Olive-drab/brown olive","#3E3C32"],
+    ["RAL 6024","Traffic green","#008754"],
+    ["RAL 6025","Fern green","#53753C"],
+    ["RAL 6026","Opal green","#005D52"],
+    ["RAL 6027","Light green","#81C0BB"],
+    ["RAL 6028","Pine green","#2D5546"],
+    ["RAL 6029","Mint green","#007243"],
+    ["RAL 6032","Signal green","#0F8558"],
+    ["RAL 6033","Mint turquoise","#478A84"],
+    ["RAL 6034","Pastel turquoise","#7FB0B2"],
+    ["RAL 6035","Pearl green","#1B542C"],
+    ["RAL 6036","Pearl opal green","#005D4C"],
+    ["RAL 6037","Pure green","#25E712"],
+    ["RAL 6038","Luminous green","#00F700"],
+    ["RAL 7000","Squirrel grey","#7E8B92"],
+    ["RAL 7001","Silver grey","#8F999F"],
+    ["RAL 7002","Olive grey","#817F68"],
+    ["RAL 7003","Moss grey","#7A7B6D"],
+    ["RAL 7004","Signal grey","#9EA0A1"],
+    ["RAL 7005","Mouse grey","#6B716F"],
+    ["RAL 7006","Beige grey","#756F61"],
+    ["RAL 7008","Khaki grey","#746643"],
+    ["RAL 7009","Green grey","#5B6259"],
+    ["RAL 7010","Tarpaulin grey","#575D57"],
+    ["RAL 7011","Iron grey","#555D61"],
+    ["RAL 7012","Basalt grey","#596163"],
+    ["RAL 7013","Brown grey","#555548"],
+    ["RAL 7015","Slate grey","#51565C"],
+    ["RAL 7016","Anthracite grey","#373F43"],
+    ["RAL 7021","Black grey","#2E3234"],
+    ["RAL 7022","Umbra grey","#4B4D46"],
+    ["RAL 7023","Concrete grey","#818479"],
+    ["RAL 7024","Graphite grey","#474A50"],
+    ["RAL 7026","Granite grey","#374447"],
+    ["RAL 7030","Stone grey","#939388"],
+    ["RAL 7031","Blue grey","#5D6970"],
+    ["RAL 7032","Pebble grey","#B9B9A8"],
+    ["RAL 7033","Cement grey","#818979"],
+    ["RAL 7034","Yellow grey","#939176"],
+    ["RAL 7035","Light grey","#CBD0CC"],
+    ["RAL 7036","Platinum grey","#9A9697"],
+    ["RAL 7037","Dusty grey","#7C7F7E"],
+    ["RAL 7038","Agate grey","#B4B8B0"],
+    ["RAL 7039","Quartz grey","#6B695F"],
+    ["RAL 7040","Window grey","#9DA3A6"],
+    ["RAL 7042","Traffic grey A","#8F9695"],
+    ["RAL 7043","Traffic grey B","#4E5451"],
+    ["RAL 7044","Silk grey","#BDBDB2"],
+    ["RAL 7045","Telegrey 1","#91969A"],
+    ["RAL 7046","Telegrey 2","#82898E"],
+    ["RAL 7047","Telegrey 4","#CFD0CF"],
+    ["RAL 7048","Pearl mouse grey","#888175"],
+    ["RAL 8000","Green brown","#887142"],
+    ["RAL 8001","Ochre brown","#9C6B30"],
+    ["RAL 8002","Signal brown","#7B5141"],
+    ["RAL 8003","Clay brown","#80542F"],
+    ["RAL 8004","Copper brown","#8F4E35"],
+    ["RAL 8007","Fawn brown","#6F4A2F"],
+    ["RAL 8008","Olive brown","#6F4F28"],
+    ["RAL 8011","Nut brown","#5A3A29"],
+    ["RAL 8012","Red brown","#673831"],
+    ["RAL 8014","Sepia brown","#49392D"],
+    ["RAL 8015","Chestnut brown","#633A34"],
+    ["RAL 8016","Mahogany brown","#4C2F26"],
+    ["RAL 8017","Chocolate brown","#44322D"],
+    ["RAL 8019","Grey brown","#3F3A3A"],
+    ["RAL 8022","Black brown","#211F20"],
+    ["RAL 8023","Orange brown","#A65E2F"],
+    ["RAL 8024","Beige brown","#79553C"],
+    ["RAL 8025","Pale brown","#755C49"],
+    ["RAL 8028","Terra brown","#4E3B2B"],
+    ["RAL 8029","Pearl copper","#773C27"],
+    ["RAL 9001","Cream","#EFEBDC"],
+    ["RAL 9002","Grey white","#DDDED4"],
+    ["RAL 9003","Signal white","#F4F8F4"],
+    ["RAL 9004","Signal black","#2E3032"],
+    ["RAL 9005","Jet black","#0A0A0D"],
+    ["RAL 9006","White aluminium","#A5A8A6"],
+    ["RAL 9007","Grey aluminium","#8F8F8C"],
+    ["RAL 9010","Pure white","#F7F9EF"],
+    ["RAL 9011","Graphite black","#292C2F"],
+    ["RAL 9012","Clean room white","#FFFDE6"],
+    ["RAL 9016","Traffic white","#F7FBF5"],
+    ["RAL 9017","Traffic black","#2A2D2F"],
+    ["RAL 9018","Papyrus white","#CFD3CD"],
+    ["RAL 9022","Pearl light grey","#9C9C9C"],
+    ["RAL 9023","Pearl dark grey","#7E8182"]
+  ]},
+  hex:{ label:'十六进制', col:'十六进制色值', hasCode:false, countWord:' 个色值', note:'与编号一一对应', merge:'每个编号一个色值，未合并',
+    sub:'中间一列就是画面自身的色值，可直接交给机调漆或店家对色',
+    foot:'颜色标注为画面自身的十六进制色值（可交机调漆对色，未做就近映射）',
+    srcNote:'色值为画面自身的十六进制值，未做任何就近映射',
+    colors:[] }
+};
+for(const k in PAINT_LINES){
+  if(!PAINT_LINES[k].colors.length) continue;
+  PAINT_LINES[k].colors = PAINT_LINES[k].colors.map(function(it){
+    const hex=it[2];
+    const c={code:it[0], name:it[1], hex:hex,
+             rgb:[parseInt(hex.slice(1,3),16),parseInt(hex.slice(3,5),16),parseInt(hex.slice(5,7),16)]};
+    c.lab=rgb2lab(c.rgb[0],c.rgb[1],c.rgb[2]);
+    return c;
+  });
+}
+let paintLine='acrylic';
+try{ const v=localStorage.getItem('pbPaintLine'); if(PAINT_LINES[v]) paintLine=v; }catch(e){}
+function paintRule(){ return PAINT_LINES[paintLine]; }
+function setPaintLine(v){
+  if(!PAINT_LINES[v]) return;
+  paintLine=v;
+  try{ localStorage.setItem('pbPaintLine',v); }catch(e){}
+  const sel=document.getElementById('paintLine'); if(sel) sel.value=v;
+  render();
+}
 const paintCache=new Map();
-/** 找最接近的马利水粉/丙烯色名（CIEDE2000，与拼豆选色同一套色差） */
+const FAR_DE=12;   // CIEDE2000 超过这个值就没有真正接近的色了（照片题材常见），标 △ 提示需自调
+/** 在当前这条规则里找最接近的一支；十六进制直接回画面自身的色值 */
 function paintNearest(c){
-  const key=c.join(',');
+  if(paintLine==='hex'){
+    const h='#'+c.map(v=>('0'+v.toString(16)).slice(-2)).join('').toUpperCase();
+    return {code:'', name:h, hex:h, de:0, far:false};
+  }
+  const key=paintLine+'|'+c.join(',');
   if(paintCache.has(key)) return paintCache.get(key);
-  const lab=rgb2lab(c[0],c[1],c[2]);
-  let best=PAINT_COLORS[0], bd=Infinity;
-  for(const p of PAINT_COLORS){
+  const pal=paintRule().colors, lab=rgb2lab(c[0],c[1],c[2]);
+  let best=pal[0], bd=Infinity;
+  for(const p of pal){
     const d=ciede2000(lab[0],lab[1],lab[2],p.lab[0],p.lab[1],p.lab[2]);
     if(d<bd){bd=d;best=p;}
   }
-  paintCache.set(key,best);
-  return best;
+  const hit={code:best.code, name:best.name, hex:best.hex, de:bd, far:bd>FAR_DE};
+  paintCache.set(key,hit);
+  return hit;
 }
-/** 图例色 -> 色名；两张色卡撞上同一个名字时按明度排「浅/中/深」，保证互不重名 */
-function paintLabels(list){
-  const groups=new Map();
-  list.forEach((c,i)=>{ const n=paintNearest(c).name; if(!groups.has(n)) groups.set(n,[]); groups.get(n).push(i); });
-  const out=new Array(list.length);
-  const L=i=>rgb2lab(list[i][0],list[i][1],list[i][2])[0];
-  for(const [name,idx] of groups){
-    if(idx.length===1){ out[idx[0]]=name; continue; }
-    idx.sort((a,b)=>L(b)-L(a));                       // 由浅到深
-    const head=name.charAt(0);
-    idx.forEach((i,k)=>{
-      const q = k===0 ? '浅' : k===idx.length-1 ? '深' : (k < idx.length/2 ? '中浅' : '中深');
-      const special = head==='浅'||head==='深'||head==='淡'||head==='中'||head==='那';
-      out[i] = special
-        ? name+'('+(k===0?'偏浅':k===idx.length-1?'偏深':(k < idx.length/2 ? '略浅' : '略深'))+')'
-        : q+name;
-    });
-  }
-  return out;
+function paintTextOf(p,full){
+  if(!p.code) return p.name;
+  if(!full && paintRule().chipCodeOnly) return p.code;
+  return `${p.code} ${p.name}`;
 }
-/** 颜料清单：同名合并成一支，记编号和区域数，按用量从多到少排 */
+/** 图例色 -> 色号/色名；chip 上用最short的形式，差得远的加 △ */
+function paintLabels(list,full){
+  return list.map(function(c){
+    const p=paintNearest(c);
+    return paintTextOf(p,full)+(p.far?' △':'');
+  });
+}
+/** 颜料清单：同一支（同色号）合并，记编号和区域数，按用量从多到少排 */
 function paintSummary(M,lg){
-  const names=paintLabels(lg.list);
+  const rule=paintRule();
+  const names=paintLabels(lg.list);              // 图上用的短标签
+  const fulls=paintLabels(lg.list,true);         // 清单/对照表用的全标签
   const blobs=new Array(lg.list.length).fill(0);
   for(const r of M.regions){ const n=lg.nums.get(r.id); if(n) blobs[n-1]++; }
   const map=new Map();
-  lg.list.forEach((c,i)=>{
-    if(!map.has(names[i])) map.set(names[i],{name:names[i],nums:[],cells:0});
-    const it=map.get(names[i]); it.nums.push(i+1); it.cells+=blobs[i];
+  lg.list.forEach(function(c,i){
+    const p=paintNearest(c), key=p.code||p.name;
+    if(!map.has(key)) map.set(key,{name:fulls[i], code:p.code, nums:[], cells:0, far:p.far});
+    const it=map.get(key); it.nums.push(i+1); it.cells+=blobs[i]; it.far=it.far||p.far;
   });
   const items=[...map.values()].sort((a,b)=>b.cells-a.cells);
-  const text=`颜料清单 ${items.length} 支（同名共用一支）：`+items.map(it=>it.nums.length>1?`${it.name}${it.nums.join('+')}号`:it.name).join('、');
-  return {names,items,text};
+  // 同一支被几个编号共用时，只要有一个编号差得远，这一支就得标 △
+  items.forEach(it=>{ if(it.far && it.name.indexOf('△')<0) it.name+=' △'; });
+  const farN=items.filter(it=>it.far).length;
+  const text=`${rule.label} ${items.length}${rule.countWord}（${rule.note}${farN?` · △${farN} 需自调`:''}）：`
+    +items.map(function(it){
+      const base=it.name.replace(' △','');
+      const t=it.nums.length>1?`${base}（${it.nums.join('+')}号）`:base;
+      return it.far?t+' △':t;
+    }).join('、');
+  return {names, items, text, rule, farN};
 }
 /** 按估算字宽折行（画布高度要先定，这里拿不到 ctx.measureText） */
 function pbWrap(text,maxW,fs){
@@ -934,7 +1250,7 @@ function drawPaint(canvas, widthPx, blank){
   const perRow=Math.max(1,Math.floor(cw/(chipW+chipGap)));
   const legendRows=Math.ceil(lg.list.length/perRow);
   const legendH=legendRows*(chipH+chipGap+nameH)+chipGap;
-  const sum=paintSummary(M,lg);              // 色名 + 颜料清单
+  const sum=paintSummary(M,lg);              // 色号 + 颜料清单
   const names=sum.names;
   const listFs=Math.round(unit*2.2);
   const listLines=pbWrap(sum.text,cw,listFs);
@@ -991,6 +1307,10 @@ function drawPaint(canvas, widthPx, blank){
   const head=blank?"数字油画线稿":(preview?"数字油画成品":"数字油画");
   ctx.fillText(`${head} · ${M.W}×${M.H} · ${lg.list.length} 色 · ${M.regions.length} 个区域${blank||preview?"":" · 已填 "+done}`, margin, margin+titleH*0.5);
   const ly=margin+titleH+M.H*s+chipGap*2;
+  let nameFs=Math.round(unit*2.0);
+  ctx.font=`${nameFs}px sans-serif`; ctx.textAlign='left';
+  let nameWmax=0; names.forEach(n=>{ nameWmax=Math.max(nameWmax, ctx.measureText(`≈${n}`).width); });
+  if(nameWmax>chipW-2) nameFs=Math.max(Math.round(unit*1.4), Math.floor(nameFs*(chipW-2)/nameWmax));
   lg.list.forEach((c,i)=>{
     const col=i%perRow, row=(i/perRow)|0;
     const lx=margin+col*(chipW+chipGap), yy=ly+row*(chipH+chipGap+nameH);
@@ -1001,7 +1321,7 @@ function drawPaint(canvas, widthPx, blank){
     ctx.font=`600 ${Math.round(unit*2.4)}px sans-serif`; ctx.textAlign="center";
     ctx.fillText(`${i+1}号`, lx+chipW/2, yy+chipH/2+0.5);
     ctx.fillStyle="#3d434b"; ctx.textAlign="left";
-    ctx.font=`${Math.round(unit*2.0)}px sans-serif`;
+    ctx.font=`${nameFs}px sans-serif`;
     ctx.fillText(`≈${names[i]}`, lx+2, yy+chipH+nameH*0.62);
   });
   ctx.fillStyle="#3d434b"; ctx.textAlign="left";
@@ -1009,7 +1329,7 @@ function drawPaint(canvas, widthPx, blank){
   listLines.forEach((t,i)=>ctx.fillText(t, margin, ly+legendRows*(chipH+chipGap+nameH)+Math.round(listFs*0.9)+i*Math.round(listFs*1.5)));
   ctx.fillStyle="#999"; ctx.textAlign="left";
   ctx.font=`${Math.round(unit*2.6)}px sans-serif`;
-  ctx.fillText(blank?"按编号填色 · 色名为相近的马利水粉/丙烯（近似，以实物色卡为准）":(preview?"成品预览 · 取消「预览成品」继续填色":"点区域填色 · 画笔可选自动或自选颜色"), margin, canvas.height-footH*0.4);
+  ctx.fillText(blank?`按编号填色 · ${paintRule().foot}`:(preview?"成品预览 · 取消「预览成品」继续填色":"点区域填色 · 画笔可选自动或自选颜色"), margin, canvas.height-footH*0.4);
   return true;
 }
 function pbSame(a,b){ return !!a&&!!b&&a[0]===b[0]&&a[1]===b[1]&&a[2]===b[2]; }
@@ -1097,7 +1417,7 @@ function saveLineArt(){
 function drawPaintSheet(canvas){
   const M=paintModel; if(!M) return false;
   const lg=pbLegend(M, pbPreview()?'preview':'work');
-  const items=paintSummary(M,lg).items;
+  const sum=paintSummary(M,lg), items=sum.items, rule=sum.rule;
   if(!items.length) return false;
   const W=2480, pad=Math.round(W*0.05), u=W/100;
   const headH=Math.round(u*10), colHeadH=Math.round(u*5);
@@ -1110,15 +1430,15 @@ function drawPaintSheet(canvas){
   ctx.fillStyle="#fff"; ctx.fillRect(0,0,canvas.width,canvas.height);
   ctx.textBaseline="middle"; ctx.textAlign="left";
   ctx.fillStyle="#222"; ctx.font=`bold ${Math.round(u*3.4)}px sans-serif`;
-  ctx.fillText(`颜料对照表 · 数字油画 ${M.W}×${M.H} · ${items.length} 支`, pad, pad+headH*0.32);
+  ctx.fillText(`颜料对照表 · 数字油画 ${M.W}×${M.H} · ${rule.label} ${items.length}${rule.countWord}`, pad, pad+headH*0.32);
   ctx.fillStyle="#8a8a8e"; ctx.font=`${Math.round(u*2.0)}px sans-serif`;
-  ctx.fillText('右列挤上实际颜料、写上管身色号；色名只是近似参考，上色前以这一行比对为准', pad, pad+headH*0.74);
+  ctx.fillText(rule.sub+(sum.farN?`（△ ${sum.farN} 个没有接近的色，需自行调色）`:''), pad, pad+headH*0.74);
   const gap=pad*0.4;
   const colW=(W-pad*2-gap*(cols-1))/cols;
-  const numW=colW*0.085, swW=colW*0.17, nameW=colW*0.30, useW=colW*0.13;
+  const numW=colW*0.105, swW=colW*0.16, nameW=colW*0.29, useW=colW*0.12;
   const blankW=colW-numW-swW-nameW-useW;
   const top0=pad+headH;
-  const heads=[['编号',numW],['画面颜色',swW],['相近色名',nameW],['用量',useW],['实物颜料（贴/写色号）',blankW]];
+  const heads=[['编号',numW],['画面颜色',swW],[rule.col,nameW],['用量',useW],['实物颜料（贴/写色号）',blankW]];
   for(let col=0;col<cols;col++){
     const x0=pad+col*(colW+gap);
     let hx=x0;
@@ -1135,8 +1455,11 @@ function drawPaintSheet(canvas){
     ctx.strokeStyle="#dfe0e4"; ctx.lineWidth=1;
     ctx.beginPath(); ctx.moveTo(x0,yy+rowH-0.5); ctx.lineTo(x0+colW,yy+rowH-0.5); ctx.stroke();
     let cx=x0;
-    ctx.textAlign="center"; ctx.fillStyle="#222"; ctx.font=`600 ${Math.round(u*2.5)}px sans-serif`;
-    ctx.fillText(it.nums.join('+'), cx+numW/2, yy+rowH/2); cx+=numW;
+    ctx.textAlign="center"; ctx.fillStyle="#222";
+    const ntxt=it.nums.join('+');
+    let nfs=Math.round(u*2.5); ctx.font=`600 ${nfs}px sans-serif`;
+    while(ctx.measureText(ntxt).width>numW-u*0.7 && nfs>Math.round(u*1.5)){ nfs-=1; ctx.font=`600 ${nfs}px sans-serif`; }
+    ctx.fillText(ntxt, cx+numW/2, yy+rowH/2); cx+=numW;
     ctx.fillStyle=pbRGB(c); ctx.fillRect(cx+u*0.6,yy+rowH*0.24,swW-u*1.2,rowH*0.52);
     ctx.strokeStyle="#c3c3c8"; ctx.lineWidth=1; ctx.strokeRect(cx+u*0.6+0.5,yy+rowH*0.24+0.5,swW-u*1.2-1,rowH*0.52-1); cx+=swW;
     ctx.textAlign="left"; ctx.fillStyle="#222";
@@ -1150,7 +1473,8 @@ function drawPaintSheet(canvas){
     ctx.setLineDash([]);
   });
   ctx.fillStyle="#999"; ctx.textAlign="left"; ctx.font=`${Math.round(u*1.9)}px sans-serif`;
-  ctx.fillText('泡泡拼豆 · 按用量从多到少排序 · 同名已合并（一个名字只需一支）', pad, canvas.height-pad*0.45);
+  ctx.fillText(`泡泡拼豆 · ${rule.label} · 按用量从多到少 · ${rule.merge} · ${rule.srcNote}`,
+    pad, canvas.height-pad*0.45);
   return true;
 }
 function savePaintSheet(){
@@ -1170,6 +1494,7 @@ function syncPaint(){
   document.getElementById('paintTip').style.display=show?'':'none';
   if(!show||!M){ document.getElementById('paintProg').textContent=''; return; }
   document.getElementById('fineVal').textContent=FINE_NAME[fineLevel()-1];
+  document.getElementById('paintLine').value=paintLine;
   const customN=M.custom.size;
   document.getElementById('paintProg').textContent=
     `共 ${M.regions.length} 区 · 已填 ${M.filled.size}${customN?` · 自选 ${customN} 区`:''} · 剩 ${M.regions.length-M.filled.size}`;
@@ -1314,11 +1639,11 @@ function copyList(){
     const blobs=new Array(lg.list.length).fill(0);
     for(const r of M.regions){ const n=lg.nums.get(r.id); if(n) blobs[n-1]++; }
     const lines=[`数字油画色号表`,`图 ${M.W}×${M.H} · ${lg.list.length} 色 · ${M.regions.length} 个区域${pbPreview()?" · 成品":""}`,""];
-    lg.list.forEach((c,i)=>lines.push(`${i+1}号 ${pbHex(c)} ≈${paintLabels(lg.list)[i]} · ${blobs[i]} 区`));
+    lg.list.forEach((c,i)=>lines.push(`${i+1}号 ${pbHex(c)} ≈${paintLabels(lg.list,true)[i]} · ${blobs[i]} 区`));
     const sum=paintSummary(M,lg);
-    lines.push("",`颜料清单 ${sum.items.length} 支（同名共用一支，按用量排序）`);
+    lines.push("",`${sum.rule.label} 颜料清单 ${sum.items.length}${sum.rule.countWord}（${sum.rule.note}${sum.farN?` · △${sum.farN} 需自调`:""}，按用量排序）`);
     sum.items.forEach(it=>lines.push(`  ${it.name} · ${it.nums.join("+")}号 · ${it.cells} 区`));
-    lines.push("色名为近似参考，以实物色卡为准");
+    lines.push(sum.rule.srcNote+(sum.farN?` · △${sum.farN} 个没有接近的色，需自行调色`:""));
     text=lines.join("\n");
   } else {
     const {counts,total,legend}=currentCounts();
