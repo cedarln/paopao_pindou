@@ -899,85 +899,6 @@ function pbgMajority(a,ok,W,H,passes){
     a.set(next);
   }
 }
-// Marching Squares：二值掩膜取轮廓，外圈补 0 保证贴边也能闭合成环
-function pbContours(inner,W,H){
-  const mask=new Uint8Array((W+2)*(H+2));
-  for(let y=0;y<H;y++)for(let x=0;x<W;x++) mask[(y+1)*(W+2)+(x+1)]=inner[y*W+x];
-  const w=W+2, h=H+2, segs=[];
-  const at=(x,y)=>mask[y*w+x];
-  for(let y=0;y<h-1;y++)for(let x=0;x<w-1;x++){
-    const tl=at(x,y), tr=at(x+1,y), br=at(x+1,y+1), bl=at(x,y+1);
-    const idx=(tl<<3)|(tr<<2)|(br<<1)|bl;
-    if(idx===0||idx===15) continue;
-    const T=[x-0.5,y-1], R=[x,y+0.5-1], B=[x-0.5,y], L=[x-1,y+0.5-1];
-    let out=null;
-    switch(idx){
-      case 1: out=[[L,B]]; break;
-      case 2: out=[[B,R]]; break;
-      case 3: out=[[L,R]]; break;
-      case 4: out=[[T,R]]; break;
-      case 6: out=[[T,B]]; break;
-      case 7: out=[[L,T]]; break;
-      case 8: out=[[L,T]]; break;
-      case 9: out=[[T,B]]; break;
-      case 12: out=[[L,R]]; break;
-      case 13: out=[[B,R]]; break;
-      case 14: out=[[L,B]]; break;
-      case 11: out=[[T,R]]; break;
-      case 5: out=((tl+tr+br+bl)>=2)?[[L,T],[B,R]]:[[T,R],[L,B]]; break;
-      case 10: out=((tl+tr+br+bl)>=2)?[[T,R],[L,B]]:[[L,T],[B,R]]; break;
-    }
-    for(const s of out) segs.push(s);
-  }
-  const key=p=>((p[0]*2)|0)*100000+((p[1]*2)|0);
-  const map=new Map();
-  segs.forEach((s,i)=>{ for(const p of s){ const k=key(p); if(!map.has(k)) map.set(k,[]); map.get(k).push(i); } });
-  const used=new Uint8Array(segs.length), loops=[];
-  for(let i=0;i<segs.length;i++){
-    if(used[i]) continue;
-    const loop=[segs[i][0].slice(),segs[i][1].slice()]; used[i]=1;
-    let guard=0;
-    while(guard++<400000){
-      const last=loop[loop.length-1];
-      const cand=map.get(key(last))||[];
-      let nxt=-1; for(const j of cand) if(!used[j]){ nxt=j; break; }
-      if(nxt<0) break;
-      used[nxt]=1;
-      const s=segs[nxt];
-      loop.push(s[0][0]===last[0]&&s[0][1]===last[1]?s[1]:s[0]);
-      if(loop[loop.length-1][0]===loop[0][0]&&loop[loop.length-1][1]===loop[0][1]) break;
-    }
-    if(loop.length>4) loops.push(loop);
-  }
-  return loops;
-}
-// 统一绕向 + 起点规范化：相邻区域共用边界才会生成同一条曲线，不重影
-function pbCanon(pts){
-  let a=0;
-  for(let i=0;i<pts.length;i++){ const p=pts[i], q=pts[(i+1)%pts.length]; a+=p[0]*q[1]-q[0]*p[1]; }
-  if(a<0) pts=pts.slice().reverse();
-  let bi=0;
-  for(let i=1;i<pts.length;i++) if(pts[i][0]<pts[bi][0]||(pts[i][0]===pts[bi][0]&&pts[i][1]<pts[bi][1])) bi=i;
-  return pts.slice(bi).concat(pts.slice(0,bi));
-}
-function pbDp(pts,eps){
-  if(pts.length<3) return pts;
-  const keep=new Uint8Array(pts.length); keep[0]=keep[pts.length-1]=1;
-  const st=[[0,pts.length-1]];
-  while(st.length){
-    const [a,b]=st.pop(); if(b<=a+1) continue;
-    const pa=pts[a], pb=pts[b];
-    const dx=pb[0]-pa[0], dy=pb[1]-pa[1], len=Math.hypot(dx,dy)||1e-6;
-    let bi=-1, bd=-1;
-    for(let i=a+1;i<b;i++){
-      const d=Math.abs((pts[i][0]-pa[0])*dy-(pts[i][1]-pa[1])*dx)/len;
-      if(d>bd){ bd=d; bi=i; }
-    }
-    if(bd>eps&&bi>0){ keep[bi]=1; st.push([a,bi],[bi,b]); }
-  }
-  const out=[]; for(let i=0;i<pts.length;i++) if(keep[i]) out.push(pts[i]);
-  return out;
-}
 function pbChaikin(pts){
   const out=[];
   for(let i=0;i<pts.length;i++){
@@ -987,33 +908,18 @@ function pbChaikin(pts){
   }
   return out;
 }
-function pbSimplify(loops,eps){
-  const res=[];
-  for(const lp of loops){
-    const closed=lp[0][0]===lp[lp.length-1][0]&&lp[0][1]===lp[lp.length-1][1];
-    let pts=pbCanon(closed?lp.slice(0,-1):lp.slice());
-    if(pts.length<6) continue;
-    let bd=-1,i0=0;
-    for(let i=1;i<pts.length;i++){ const dx=pts[i][0]-pts[0][0], dy=pts[i][1]-pts[0][1], d=dx*dx+dy*dy; if(d>bd){ bd=d; i0=i; } }
-    const A=pts.slice(0,i0+1), Bp=pts.slice(i0).concat([pts[0]]);
-    let s=pbDp(A,eps).concat(pbDp(Bp,eps).slice(1,-1));
-    if(s.length<4) continue;
-    res.push(pbChaikin(pbChaikin(s)));
-  }
-  return res;
-}
-// 全局边界：所有分区线只算一次、只画一次，相邻区域共用同一条曲线（不会重影/留缝）
-function pbBorderChains(M){
-  const W=M.W,H=M.H,rid=M.rid;
-  const lab=(x,y)=>(x<0||y<0||x>=W||y>=H)?-999:rid[y*W+x];
+// 像素边走线：填色轮廓和分区线共用同一套走线+圆角规则，填进去的颜色必然贴着线稿
+// lab(x,y)=格子分组；frame='all' 连画面外框一起走（分区线），'inside' 只在格子属于本组时补外框（单区域轮廓）
+function pbEdgeChains(lab,W,H,frame){
   const vi=(x,y)=>y*(W+1)+x;
   const segs=[];
   for(let y=0;y<H;y++)for(let x=0;x<W;x++){
     const l=lab(x,y);
     if(lab(x+1,y)!==l) segs.push([vi(x+1,y),vi(x+1,y+1)]);
     if(lab(x,y+1)!==l) segs.push([vi(x,y+1),vi(x+1,y+1)]);
-    if(x===0) segs.push([vi(0,y),vi(0,y+1)]);
-    if(y===0) segs.push([vi(x,0),vi(x+1,0)]);
+    const onFrame=frame==='all'||(frame==='inside'&&l);
+    if(onFrame&&x===0) segs.push([vi(0,y),vi(0,y+1)]);
+    if(onFrame&&y===0) segs.push([vi(x,0),vi(x+1,0)]);
   }
   const adj=new Map();
   segs.forEach((s,i)=>{ for(const v of s){ if(!adj.has(v)) adj.set(v,[]); adj.get(v).push(i); } });
@@ -1064,6 +970,15 @@ function pbBorderChains(M){
     chains.push({pts,closed});
   }
   return chains;
+}
+// 全局边界：所有分区线只算一次、只画一次，相邻区域共用同一条曲线（不会重影/留缝）
+function pbBorderChains(M){
+  const W=M.W,H=M.H,rid=M.rid;
+  return pbEdgeChains((x,y)=>(x<0||y<0||x>=W||y>=H)?-999:rid[y*W+x], W, H, 'all');
+}
+// 单个区域的填色轮廓：画面外按 0 处理，环必定闭合；区域里的洞单独成环，交给 evenodd 挖掉
+function pbMaskLoops(mask,W,H){
+  return pbEdgeChains((x,y)=>(x<0||y<0||x>=W||y>=H)?0:(mask[y*W+x]?1:0), W, H, 'inside').map(c=>c.pts);
 }
 function pbPathOpen(ctx,pts,s){
   const n=pts.length;
@@ -1240,10 +1155,9 @@ function buildPaint(){
     if(!numByColor.has(key)){ numByColor.set(key,colors.length+1); colors.push(r.color); }
     r.num=numByColor.get(key);
   }
-  const eps=1.6;
   for(const r of regions){
     const mask=new Uint8Array(n); for(const p of r.cells) mask[p]=1;
-    r.loops=pbSimplify(pbContours(mask,W,H),eps);
+    r.loops=pbMaskLoops(mask,W,H);            // 和分区线同源：填满、不错位
     const d=pbDistField(mask,W,H,r.cells);
     let bi=r.cells[0], bv=-1;
     for(const p of r.cells) if(d[p]>bv){ bv=d[p]; bi=p; }
@@ -1300,12 +1214,15 @@ function drawPaint(canvas, widthPx, blank){
     ctx.fillStyle=rgb(c);
     ctx.beginPath(); pbPath(ctx,r.loops,s); ctx.fill('evenodd');
   }
-  // 用各自的颜色描一遍边，把区域之间的细小缝隙盖掉
-  ctx.lineJoin="round"; ctx.lineCap="round"; ctx.lineWidth=Math.max(1,s*0.8);
+  // 用各自的颜色描一遍边，把区域之间的抗锯齿细缝盖掉；描边裁在本区域内，颜色不会糊到隔壁格子
+  ctx.lineJoin="round"; ctx.lineCap="round"; ctx.lineWidth=Math.max(1,s*1.2);
   for(const r of M.regions){
-    const c=ac(r);
-    ctx.strokeStyle=c?rgb(c):"#e3e4e9";
+    const c=ac(r); if(!c) continue;
+    ctx.strokeStyle=rgb(c);
+    ctx.save();
+    ctx.beginPath(); pbPath(ctx,r.loops,s); ctx.clip('evenodd');
     ctx.beginPath(); pbPath(ctx,r.loops,s); ctx.stroke();
+    ctx.restore();
   }
   // 分区线：全局只算一次、只画一次，相邻区域共用同一条曲线；成品预览时不画线
   if(!preview){
